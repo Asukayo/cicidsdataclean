@@ -250,6 +250,6 @@ if __name__ == "__main__":
     # Adjust for cleaning the correct dataset into the desired format
     
     # Needs directory with dataset name containing empty dir 'clean' and dir 'original' containing de csv's
-    clean_dataset('cicids2017', filetypes=['feather', 'parquet'])
-    aggregate_data('cicids2017', save=True, filetype='feather')
-    aggregate_data('cicids2017', save=True, filetype='parquet')
+    clean_dataset('../cicids2017', filetypes=['feather', 'parquet'])
+    aggregate_data('../cicids2017', save=True, filetype='feather')
+    aggregate_data('../cicids2017', save=True, filetype='parquet')
