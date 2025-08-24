@@ -18,6 +18,7 @@ class moving_avg(nn.Module):
         # padding on the both ends of time series
         front = x[:, 0:1, :].repeat(1, (self.kernel_size - 1) // 2, 1)
         end = x[:, -1:, :].repeat(1, (self.kernel_size - 1) // 2, 1)
+
         x = torch.cat([front, x, end], dim=1)
         x = self.avg(x.permute(0, 2, 1))
         x = x.permute(0, 2, 1)
@@ -38,6 +39,29 @@ class series_decomp(nn.Module):
         res = x - moving_mean
         return res, moving_mean
 
+class Residual(nn.Module):
+    def __init__(self, input_channels, num_channels,
+                 use_1x1conv=False, strides=1):
+        super().__init__()
+        self.conv1 = nn.Conv1d(input_channels, num_channels,
+                               kernel_size=3, padding=1, stride=strides)
+        self.conv2 = nn.Conv1d(num_channels, num_channels,
+                               kernel_size=3, padding=1)
+        if use_1x1conv:
+            self.conv3 = nn.Conv1d(input_channels, num_channels,
+                                   kernel_size=1, stride=strides)
+        else:
+            self.conv3 = None
+        self.bn1 = nn.BatchNorm1d(num_channels)
+        self.bn2 = nn.BatchNorm1d(num_channels)
+
+    def forward(self, X):
+        Y = F.relu(self.bn1(self.conv1(X)))
+        Y = self.bn2(self.conv2(Y))
+        if self.conv3:
+            X = self.conv3(X)
+        Y += X
+        return F.relu(Y)
 
 class Model(nn.Module):
     """
@@ -68,9 +92,16 @@ class Model(nn.Module):
             self.Linear_Seasonal = nn.Linear(self.seq_len, self.feature_dim)
             self.Linear_Trend = nn.Linear(self.seq_len, self.feature_dim)
 
+        # 在classifier前加一个残差块
+        # self.residual_block = Residual(self.channels,self.channels)
+
         # 添加分类头：将分解后的特征映射到分类结果
         self.classifier = nn.Sequential(
-            nn.Linear(self.channels * self.feature_dim * 2, 64),  # *2因为有seasonal+trend
+            nn.Linear(self.channels * self.feature_dim * 2, 64),# *2因为有seasonal+trend
+            # nn.Conv1d(64,32,kernel_size=3,padding=1),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            # nn.Linear(64,32),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(64, self.num_classes)
@@ -86,6 +117,7 @@ class Model(nn.Module):
                                           dtype=seasonal_init.dtype).to(seasonal_init.device)
             trend_output = torch.zeros([trend_init.size(0), trend_init.size(1), self.feature_dim],
                                        dtype=trend_init.dtype).to(trend_init.device)
+
             for i in range(self.channels):
                 seasonal_output[:, i, :] = self.Linear_Seasonal[i](seasonal_init[:, i, :])
                 trend_output[:, i, :] = self.Linear_Trend[i](trend_init[:, i, :])
@@ -93,10 +125,16 @@ class Model(nn.Module):
             seasonal_output = self.Linear_Seasonal(seasonal_init)
             trend_output = self.Linear_Trend(trend_init)
 
+        # 在展平前加一个残差块
+        # seasonal_output = self.residual_block(seasonal_output)
+        # trend_output = self.residual_block(trend_output)
+
         # 将seasonal和trend特征展平并拼接
         seasonal_flat = seasonal_output.flatten(1)  # [Batch, channels * feature_dim]
         trend_flat = trend_output.flatten(1)  # [Batch, channels * feature_dim]
         combined_features = torch.cat([seasonal_flat, trend_flat], dim=1)  # [Batch, channels * feature_dim * 2]
+
+
 
         # 分类输出
         output = self.classifier(combined_features)  # [Batch, num_classes]

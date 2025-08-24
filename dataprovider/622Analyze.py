@@ -27,7 +27,7 @@ def load_data(data_dir, window_size=100, step_size=20):
     return X, y, metadata
 
 
-def split_data_chronologically(X, y, train_ratio=0.6, val_ratio=0.2):
+def split_data_chronologically(X, y, train_ratio=0.6, val_ratio=0.1):
     """Split data chronologically"""
     total_samples = len(X)
     train_end = int(total_samples * train_ratio)

@@ -1,3 +1,4 @@
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -8,9 +9,10 @@ from tqdm import tqdm
 import json
 
 # 导入自定义模块
-from models.ADLinear import Model
-from dataprovider.provider_6_2_2 import load_data, split_data_chronologically, create_data_loaders
+from models.ADLinear_supervised import Model
+from dataprovider.provider_6_1_3 import load_data, split_data_chronologically, create_data_loaders
 from config import CICIDS_WINDOW_SIZE, CICIDS_WINDOW_STEP
+from units.trainer_valder import train_epoch,val_epoch
 
 
 class Config:
@@ -19,17 +21,17 @@ class Config:
     def __init__(self):
         # 数据配置
         self.seq_len = CICIDS_WINDOW_SIZE  # 100
-        self.enc_in = 38  # 特征数量（important_features_90.txt）
+        self.enc_in = 45  # 特征数量（important_features_90.txt）
 
         # 模型配置
-        self.pred_len = 32  # 特征提取维度
+        self.pred_len = 38  # 特征提取维度
         self.num_classes = 2  # 二分类
-        self.individual = False  # 共享权重
+        self.individual = True  # 共享权重
 
         # 训练配置
         self.epochs = 50
-        self.batch_size = 128
-        self.learning_rate = 0.001
+        self.batch_size = 64
+        self.learning_rate = 0.0001
         self.weight_decay = 1e-4
         self.patience = 10  # 早停耐心值
 
@@ -40,71 +42,6 @@ class Config:
         # 其他
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.save_dir = 'checkpoints'
-
-
-def train_epoch(model, train_loader, criterion, optimizer, device):
-    """训练一个epoch"""
-    # 开启训练模式
-    model.train()
-    # 总训练损失
-    total_loss = 0
-    all_preds = []
-    all_labels = []
-
-    for batch_x, batch_x_mark, batch_y in tqdm(train_loader, desc='Training'):
-        batch_x = batch_x.to(device)
-        batch_y = batch_y.squeeze().to(device)  # [batch_size]
-
-        optimizer.zero_grad()
-        outputs = model(batch_x)  # [batch_size, num_classes]
-        loss = criterion(outputs, batch_y)
-
-        loss.backward()
-        optimizer.step()
-
-        total_loss += loss.item()
-
-        # 收集预测和标签
-        preds = torch.argmax(outputs, dim=1).cpu().numpy()
-        all_preds.extend(preds)
-        all_labels.extend(batch_y.cpu().numpy())
-
-    avg_loss = total_loss / len(train_loader)
-    accuracy = accuracy_score(all_labels, all_preds)
-
-    return avg_loss, accuracy
-
-
-def validate_epoch(model, val_loader, criterion, device):
-    """验证一个epoch"""
-    model.eval()
-    total_loss = 0
-    all_preds = []
-    all_labels = []
-
-    with torch.no_grad():
-        for batch_x, batch_x_mark, batch_y in val_loader:
-            batch_x = batch_x.to(device)
-            batch_y = batch_y.squeeze().to(device)
-
-            outputs = model(batch_x)
-            loss = criterion(outputs, batch_y)
-            total_loss += loss.item()
-
-            preds = torch.argmax(outputs, dim=1).cpu().numpy()
-            all_preds.extend(preds)
-            all_labels.extend(batch_y.cpu().numpy())
-
-    avg_loss = total_loss / len(val_loader)
-
-    # 计算详细指标
-    accuracy = accuracy_score(all_labels, all_preds)
-    precision = precision_score(all_labels, all_preds, average='weighted', zero_division=0)
-    recall = recall_score(all_labels, all_preds, average='weighted', zero_division=0)
-    f1 = f1_score(all_labels, all_preds, average='weighted', zero_division=0)
-
-    return avg_loss, accuracy, precision, recall, f1
-
 
 def train_model(configs):
     """主训练函数"""
@@ -159,7 +96,7 @@ def train_model(configs):
         train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, configs.device)
 
         # 验证
-        val_loss, val_acc, val_precision, val_recall, val_f1 = validate_epoch(
+        val_loss, val_acc, val_precision, val_recall, val_f1 = val_epoch(
             model, val_loader, criterion, configs.device
         )
 
@@ -219,7 +156,7 @@ def train_model(configs):
     best_checkpoint = torch.load(os.path.join(configs.save_dir, 'best_model.pth'))
     model.load_state_dict(best_checkpoint['model_state_dict'])
 
-    test_loss, test_acc, test_precision, test_recall, test_f1 = validate_epoch(
+    test_loss, test_acc, test_precision, test_recall, test_f1 = val_epoch(
         model, test_loader, criterion, configs.device
     )
 

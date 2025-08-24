@@ -18,6 +18,7 @@ class moving_avg(nn.Module):
         # padding on the both ends of time series
         front = x[:, 0:1, :].repeat(1, (self.kernel_size - 1) // 2, 1)
         end = x[:, -1:, :].repeat(1, (self.kernel_size - 1) // 2, 1)
+
         x = torch.cat([front, x, end], dim=1)
         x = self.avg(x.permute(0, 2, 1))
         x = x.permute(0, 2, 1)
@@ -41,15 +42,15 @@ class series_decomp(nn.Module):
 
 class Model(nn.Module):
     """
-    Decomposition-Linear
+    DLinear-Classifier: Modified DLinear for binary classification
     """
 
     def __init__(self, configs):
         super(Model, self).__init__()
-        # 若使用无监督，则把该行注释去除即可
-        # configs.pred_len = configs.pred_len
         self.seq_len = configs.seq_len
-        self.pred_len = configs.pred_len
+        # 将pred_len重新定义为特征提取维度
+        self.feature_dim = getattr(configs, 'pred_len', 32)  # 默认32维特征
+        self.num_classes = getattr(configs, 'num_classes', 2)  # 默认二分类
 
         # Decompsition Kernel Size
         kernel_size = 25
@@ -62,29 +63,34 @@ class Model(nn.Module):
             self.Linear_Trend = nn.ModuleList()
 
             for i in range(self.channels):
-                self.Linear_Seasonal.append(nn.Linear(self.seq_len, self.pred_len))
-                self.Linear_Trend.append(nn.Linear(self.seq_len, self.pred_len))
-
-                # Use this two lines if you want to visualize the weights
-                # self.Linear_Seasonal[i].weight = nn.Parameter((1/self.seq_len)*torch.ones([self.pred_len,self.seq_len]))
-                # self.Linear_Trend[i].weight = nn.Parameter((1/self.seq_len)*torch.ones([self.pred_len,self.seq_len]))
+                self.Linear_Seasonal.append(nn.Linear(self.seq_len, self.feature_dim))
+                self.Linear_Trend.append(nn.Linear(self.seq_len, self.feature_dim))
         else:
-            self.Linear_Seasonal = nn.Linear(self.seq_len, self.pred_len)
-            self.Linear_Trend = nn.Linear(self.seq_len, self.pred_len)
+            self.Linear_Seasonal = nn.Linear(self.seq_len, self.feature_dim)
+            self.Linear_Trend = nn.Linear(self.seq_len, self.feature_dim)
 
-            # Use this two lines if you want to visualize the weights
-            # self.Linear_Seasonal.weight = nn.Parameter((1/self.seq_len)*torch.ones([self.pred_len,self.seq_len]))
-            # self.Linear_Trend.weight = nn.Parameter((1/self.seq_len)*torch.ones([self.pred_len,self.seq_len]))
+        # 添加分类头：将分解后的特征映射到分类结果
+        self.classifier = nn.Sequential(
+            nn.Linear(self.channels * self.feature_dim * 2, 64),  # *2因为有seasonal+trend
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(64,32),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(32, self.num_classes)
+        )
 
     def forward(self, x):
         # x: [Batch, Input length, Channel]
         seasonal_init, trend_init = self.decompsition(x)
         seasonal_init, trend_init = seasonal_init.permute(0, 2, 1), trend_init.permute(0, 2, 1)
+
         if self.individual:
-            seasonal_output = torch.zeros([seasonal_init.size(0), seasonal_init.size(1), self.pred_len],
+            seasonal_output = torch.zeros([seasonal_init.size(0), seasonal_init.size(1), self.feature_dim],
                                           dtype=seasonal_init.dtype).to(seasonal_init.device)
-            trend_output = torch.zeros([trend_init.size(0), trend_init.size(1), self.pred_len],
+            trend_output = torch.zeros([trend_init.size(0), trend_init.size(1), self.feature_dim],
                                        dtype=trend_init.dtype).to(trend_init.device)
+
             for i in range(self.channels):
                 seasonal_output[:, i, :] = self.Linear_Seasonal[i](seasonal_init[:, i, :])
                 trend_output[:, i, :] = self.Linear_Trend[i](trend_init[:, i, :])
@@ -92,5 +98,11 @@ class Model(nn.Module):
             seasonal_output = self.Linear_Seasonal(seasonal_init)
             trend_output = self.Linear_Trend(trend_init)
 
-        x = seasonal_output + trend_output
-        return x.permute(0, 2, 1)  # to [Batch, Output length, Channel]
+        # 将seasonal和trend特征展平并拼接
+        seasonal_flat = seasonal_output.flatten(1)  # [Batch, channels * feature_dim]
+        trend_flat = trend_output.flatten(1)  # [Batch, channels * feature_dim]
+        combined_features = torch.cat([seasonal_flat, trend_flat], dim=1)  # [Batch, channels * feature_dim * 2]
+
+        # 分类输出
+        output = self.classifier(combined_features)  # [Batch, num_classes]
+        return output
