@@ -77,15 +77,13 @@ def load_data(data_dir, window_size=100, step_size=20):
     y_file = os.path.join(data_dir, f'selected_y_w{window_size}_s{step_size}.npy')
     metadata_file = os.path.join(data_dir, f'selected_metadata_w{window_size}_s{step_size}.pkl')
 
-    print("加载数据...")
     X = np.load(X_file)
     y = np.load(y_file)
 
     with open(metadata_file, 'rb') as f:
             metadata = pickle.load(f)
 
-    print(f"数据形状: X{X.shape}, y{y.shape}")
-    print(f"特征数量: {len(metadata['feature_names'])}")
+
 
     return X, y, metadata
 
