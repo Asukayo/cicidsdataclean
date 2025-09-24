@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-from models.mymodel.millet.resnet import ResNetFeatureExtractor
+
 
 
 class moving_avg(nn.Module):
@@ -42,34 +42,10 @@ class series_decomp(nn.Module):
     def forward(self, x):
         moving_mean = self.moving_avg(x)
         res = x - moving_mean
-        return res, moving_mean
+        # 修改moving_mean的维度为[batch_size,channels,seq_len]
+        return res, moving_mean.permute(0, 2, 1)
 
-class Residual(nn.Module):
-    """
-    自行编写的残差块
-    """
-    def __init__(self, input_channels, num_channels,
-                 use_1x1conv=False, strides=1):
-        super().__init__()
-        self.conv1 = nn.Conv1d(input_channels, num_channels,
-                               kernel_size=3, padding=1, stride=strides)
-        self.conv2 = nn.Conv1d(num_channels, num_channels,
-                               kernel_size=3, padding=1)
-        if use_1x1conv:
-            self.conv3 = nn.Conv1d(input_channels, num_channels,
-                                   kernel_size=1, stride=strides)
-        else:
-            self.conv3 = None
-        self.bn1 = nn.BatchNorm1d(num_channels)
-        self.bn2 = nn.BatchNorm1d(num_channels)
 
-    def forward(self, X):
-        Y = F.relu(self.bn1(self.conv1(X)))
-        Y = self.bn2(self.conv2(Y))
-        if self.conv3:
-            X = self.conv3(X)
-        Y += X
-        return F.relu(Y)
 
 
 class DFT_series_decomp(nn.Module):
@@ -77,7 +53,7 @@ class DFT_series_decomp(nn.Module):
     Series decomposition block
     """
 
-    def __init__(self, top_k=5,low_feq_ratio = 0.5):
+    def __init__(self, top_k=5,low_feq_ratio = 0.4):
         super(DFT_series_decomp, self).__init__()
         # 保留频谱中最大的前五个频率分量作为季节性成分
         self.top_k = top_k
@@ -133,8 +109,6 @@ class DFT_series_decomp(nn.Module):
         return x_season, x_trend
 
 
-
-
 class Model(nn.Module):
     """
     主体模型。目前使用MLP架构
@@ -151,7 +125,11 @@ class Model(nn.Module):
 
         # 定义分解周期/趋势变量的核大小
         kernel_size = 25
-        self.decompsition = DFT_series_decomp(top_k=5, low_feq_ratio=0.5)
+
+        # 定义DFT分解块
+        self.dft_decomp = DFT_series_decomp(top_k=4,low_feq_ratio=0.5);
+
+        self.decompsition = series_decomp(kernel_size)
         # 是否对每一个维度的变量使用独立的线性层
         # 即默认通道独立或者通道相关
         self.individual = configs.individual
@@ -159,17 +137,7 @@ class Model(nn.Module):
         self.channels = configs.enc_in
 
 
-        # 定义ResNet特征提取器属性
-        # 定义季节趋势特征提取器
-        self.resnet_seasonal_feature_extractor = ResNetFeatureExtractor(self.channels,padding_mode="replicate").instance_encoder
-        # 定义趋势特征提取器
-        self.resnet_trend_feature_extractor = ResNetFeatureExtractor(self.channels,
-                                                                        padding_mode="replicate").instance_encoder
-
-        # 如果趋势变量和季节变量使用同一个特征提取装置呢？
-        # self.common_feature_extractor = ResNetFeatureExtractor(self.channels,padding_mode="replicate").instance_encoder
-
-        self.resnet_output = 64
+        # self.resnet_output = 64
 
         # 特征提取模块，即线性层
         # 运用通道独立时
@@ -187,42 +155,39 @@ class Model(nn.Module):
             self.Linear_Seasonal = nn.Linear(self.seq_len, self.feature_dim)
             self.Linear_Trend = nn.Linear(self.seq_len, self.feature_dim)
 
-        # 在classifier前加一个残差块(失败)
-        # self.residual_block = Residual(self.channels,self.channels)
+            # 残差变量
+            # self.Linear_Redusial = nn.Linear(self.seq_len, self.feature_dim)
+
+
 
         # 添加分类头：将分解后的特征映射到分类结果
         self.classifier = nn.Sequential(
             # 直接进行展平拼接为[,]二维张量
-            nn.Linear(self.channels * self.resnet_output * 2, 64),# *2因为有seasonal+trend
+            nn.Linear(self.channels * self.feature_dim * 2, self.num_classes),# *2因为有seasonal+trend
             # nn.Conv1d(64,32,kernel_size=3,padding=1),
             # nn.ReLU(),
-            nn.Dropout(0.3),
-            # nn.BatchNorm1d(64),
-            # nn.Linear(64,32),
-            # nn.Linear(64, 32),
+            # nn.Dropout(0.1),
+
+            # nn.Linear(64, self.num_classes),
             # nn.ReLU(),
-            # nn.Dropout(0.2),
-            # nn.BatchNorm1d(32),
+            # nn.Dropout(0.1),
+            # # nn.BatchNorm1d(32),
             # 最终输出二分类结果
-            nn.Linear(64, self.num_classes)
+            # nn.Linear(32, self.num_classes)
         )
 
     def forward(self, x):
         # x: [Batch, Input length, Channel]
         # 使用分解模块，将原始的序列分解为季节和趋势变量
-        seasonal_init, trend_init = self.decompsition(x)
+        # x = x.permute(0, 2, 1)
+        # 仅使用dft分解得到周期变量
+        seasonal_init,trend_init = self.dft_decomp(x) # dft 输出的形状为[batch_size,channels,seq_len]
         # 交换Input length,Channel维度，使得x变为
         # x :[Batch,Channel,Input length]
-        # seasonal_init, trend_init = seasonal_init.permute(0, 2, 1), trend_init.permute(0, 2, 1)
+        # 使用moving_average得到趋势变量
+        # _,trend_init = self.decompsition(x)
 
-
-        # 在线性层之前分别对seasonal和trend使用resnet特征提取
-        seasonal_init, trend_init = (self.resnet_seasonal_feature_extractor.forward(seasonal_init),
-                                     self.resnet_trend_feature_extractor.forward(trend_init))
-
-        # 使用同一个resnet_block对特征进行提取
-        # seasonal_init = self.common_feature_extractor(seasonal_init)
-        # trend_init = self.common_feature_extractor(trend_init)
+        # redusial = x.permute(0, 2, 1) - seasonal_init - trend_init
 
         # 使用线性层
         if self.individual:
@@ -240,14 +205,15 @@ class Model(nn.Module):
             seasonal_output = self.Linear_Seasonal(seasonal_init)
             trend_output = self.Linear_Trend(trend_init)
 
-        # 在展平前加一个残差块
-        # seasonal_output = self.residual_block(seasonal_output)
-        # trend_output = self.residual_block(trend_output)
+            # redusial_output = self.Linear_Redusial(redusial)
 
         # 将seasonal和trend特征展平并拼接
         seasonal_flat = seasonal_output.flatten(1)  # [Batch, channels * feature_dim]
         trend_flat = trend_output.flatten(1)  # [Batch, channels * feature_dim]
-        combined_features = torch.cat([seasonal_flat, trend_flat], dim=1)  # [Batch, channels * feature_dim * 2]
+
+        # redusial_flat = redusial_output.flatten(1)
+
+        combined_features = torch.cat([trend_flat, seasonal_flat], dim=1)  # [Batch, channels * feature_dim * 2]
 
         # 分类输出
         output = self.classifier(combined_features)  # [Batch, num_classes]

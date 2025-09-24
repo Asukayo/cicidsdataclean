@@ -11,7 +11,9 @@ import json
 # 导入自定义模块
 # from models.mymodel.MyModel import Model
 #
-from models.ADLinear_supervised import Model
+from models.mymodel.mmwith_dft_decom import Model
+
+# from models.ADLinear_supervised import Model
 
 from dataprovider.provider_6_1_3 import load_data, split_data_chronologically, create_data_loaders
 from config import CICIDS_WINDOW_SIZE, CICIDS_WINDOW_STEP
@@ -29,36 +31,32 @@ class Config:
         # 模型配置
         self.pred_len = 38  # 特征提取维度
         self.num_classes = 2  # 二分类
-        self.individual = False  # 是否独立为每一维度使用独立线性层
+        self.individual = False # 是否独立为每一维度使用独立线性层
 
         # 训练配置
         self.epochs = 50
-        self.batch_size = 256
-        self.learning_rate = 0.0001
-        self.weight_decay = 1e-4
+        self.batch_size = 128
+        self.learning_rate = 0.00005
+        self.weight_decay = 1e-5
         self.patience = 10  # 早停耐心值
 
         # 数据分割
         self.train_ratio = 0.6
         self.val_ratio = 0.1
 
+
         # 其他
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        # self.device = 'cpu'
         self.save_dir = 'checkpoints'
+
 
 def train_model(configs):
     """主训练函数"""
     # 创建保存目录
     os.makedirs(configs.save_dir, exist_ok=True)
 
-    print("=" * 60)
-    print("DLinear-Classifier Training for CICIDS2017")
-    print("=" * 60)
-    print(f"Device: {configs.device}")
-    print(f"Window size: {configs.seq_len}, Features: {configs.enc_in}")
-
     # 加载数据
-    print("\n1. Loading data...")
     data_dir = "../cicids2017/selected_features"
     X, y, metadata = load_data(data_dir, CICIDS_WINDOW_SIZE, CICIDS_WINDOW_STEP)
 
@@ -67,7 +65,6 @@ def train_model(configs):
     print(f"Updated feature count: {configs.enc_in}")
 
     # 分割数据
-    print("\n2. Splitting data...")
     train_data, val_data, test_data = split_data_chronologically(
         X, y, configs.train_ratio, configs.val_ratio
     )
@@ -166,7 +163,6 @@ def train_model(configs):
     print("\n" + "=" * 60)
     print("FINAL RESULTS")
     print("=" * 60)
-    print(f"Best Validation F1: {best_val_f1:.4f}")
     print(f"Test Accuracy:      {test_acc:.4f}")
     print(f"Test Precision:     {test_precision:.4f}")
     print(f"Test Recall:        {test_recall:.4f}")

@@ -72,10 +72,10 @@ class Model(nn.Module):
         # 添加分类头：将分解后的特征映射到分类结果
         self.classifier = nn.Sequential(
             nn.Linear(self.channels * self.feature_dim * 2, 64),  # *2因为有seasonal+trend
-            nn.ReLU(),
+            # nn.ReLU(),
             nn.Dropout(0.2),
             nn.Linear(64,32),
-            nn.ReLU(),
+            # nn.ReLU(),
             nn.Dropout(0.2),
             nn.Linear(32, self.num_classes)
         )

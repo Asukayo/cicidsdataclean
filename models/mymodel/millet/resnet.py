@@ -16,8 +16,8 @@ class ResNetFeatureExtractor(nn.Module):
         super().__init__()
         self.n_in_channels = n_in_channels
         self.instance_encoder = nn.Sequential(
-            ResNetBlock(n_in_channels, 64, padding_mode=padding_mode),
-            ResNetBlock(64, 64, padding_mode=padding_mode),
+            ResNetBlock(n_in_channels, 32, padding_mode=padding_mode),
+            ResNetBlock(32, 64, padding_mode=padding_mode),
             # ResNetBlock(128, 128, padding_mode=padding_mode),
         )
 
