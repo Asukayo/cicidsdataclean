@@ -1,24 +1,20 @@
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import os
 import json
 
-# 导入自定义模块
-# from models.mymodel.MyModel import Model
-#
-from models.mymodel.Autoformer.mmwith_dft_decom import Model
 
-# from models.ADLinear_supervised import Model
+from models.mymodel.catch.modelWithCATCH import Model
+
 
 from dataprovider.provider_6_1_3 import load_data, split_data_chronologically, create_data_loaders
 from config import CICIDS_WINDOW_SIZE, CICIDS_WINDOW_STEP
-from units.trainer_valder import train_epoch,val_epoch
+from units.t_v_catch import train_epoch,val_epoch
 
 
 class Config:
-    """DLinear分类器配置"""
+    """基于CATCH的模型配置"""
 
     def __init__(self):
         # 数据配置
@@ -28,23 +24,19 @@ class Config:
         # 模型配置
         self.pred_len = 38  # 特征提取维度
         self.num_classes = 2  # 二分类
-        self.individual = False # 是否独立为每一维度使用独立线性层
 
         # 训练配置
         self.epochs = 50
-        self.batch_size = 128
-        self.learning_rate = 0.00005
+        self.batch_size = 64
+        self.learning_rate = 0.0005
         self.weight_decay = 1e-5
-        self.patience = 10  # 早停耐心值
-
+        self.patience = 15  # 早停耐心值
+        self.lambda_contrastive = 0.05 # 对比损失权重系数
         # 数据分割
         self.train_ratio = 0.6
         self.val_ratio = 0.1
-
-
         # 其他
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        # self.device = 'cpu'
         self.save_dir = 'checkpoints'
 
 
@@ -89,12 +81,16 @@ def train_model(configs):
     train_history = []
 
     for epoch in range(configs.epochs):
-        # 训练
-        train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, configs.device)
+        # 训练 - 修复：使用关键字参数传递
+        train_loss, train_acc = train_epoch(
+            model, train_loader, criterion, optimizer,
+            lambda_contrastive=configs.lambda_contrastive,
+            device=configs.device
+        )
 
         # 验证
         val_loss, val_acc, val_precision, val_recall, val_f1 = val_epoch(
-            model, val_loader, criterion, configs.device
+            model, val_loader, criterion,lambda_contrastive=configs.lambda_contrastive,device=configs.device
         )
 
         # 学习率调整
@@ -154,7 +150,8 @@ def train_model(configs):
     model.load_state_dict(best_checkpoint['model_state_dict'])
 
     test_loss, test_acc, test_precision, test_recall, test_f1 = val_epoch(
-        model, test_loader, criterion, configs.device
+        model, test_loader, criterion, lambda_contrastive=configs.lambda_contrastive,
+        device=configs.device
     )
 
     print("\n" + "=" * 60)

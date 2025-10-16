@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-
+from models.mymodel.Autoformer.STL_Decompose import STL_Decompose
 
 
 class moving_avg(nn.Module):
@@ -53,11 +53,11 @@ class DFT_series_decomp(nn.Module):
     Series decomposition block
     """
 
-    def __init__(self, top_k=5,low_feq_ratio = 0.4):
+    def __init__(self, top_k=5,low_freq_ratio = 0.4):
         super(DFT_series_decomp, self).__init__()
         # 保留频谱中最大的前五个频率分量作为季节性成分
         self.top_k = top_k
-        self.low_feq_ratio = low_feq_ratio
+        self.low_freq_ratio = low_freq_ratio
 
     def forward(self, x):
         # 在内部进行维度交换
@@ -75,7 +75,7 @@ class DFT_series_decomp(nn.Module):
 
         # 动态确定低频范围，避免高频噪声
         total_freq_bins = freq.shape[-1]
-        low_freq_cutoff = max(self.top_k,int(total_freq_bins*self.low_feq_ratio))
+        low_freq_cutoff = max(self.top_k,int(total_freq_bins*self.low_freq_ratio))
         low_freq_cutoff = min(low_freq_cutoff, total_freq_bins)
 
         # 在低频范围内选择top_k分量
@@ -127,7 +127,7 @@ class Model(nn.Module):
         kernel_size = 25
 
         # 定义DFT分解块
-        self.dft_decomp = DFT_series_decomp(top_k=4,low_feq_ratio=0.5);
+        self.stl_decomp = STL_Decompose(top_k=5,low_freq_ratio=0.4)
 
         self.decompsition = series_decomp(kernel_size)
         # 是否对每一个维度的变量使用独立的线性层
@@ -179,15 +179,13 @@ class Model(nn.Module):
     def forward(self, x):
         # x: [Batch, Input length, Channel]
         # 使用分解模块，将原始的序列分解为季节和趋势变量
-        # x = x.permute(0, 2, 1)
-        # 仅使用dft分解得到周期变量
-        seasonal_init,trend_init = self.dft_decomp(x) # dft 输出的形状为[batch_size,channels,seq_len]
+
+        trend_init, seasonal_init,_ = self.stl_decomp(x) # stl 输出的形状为[batch_size,channels,seq_len]
+
         # 交换Input length,Channel维度，使得x变为
         # x :[Batch,Channel,Input length]
-        # 使用moving_average得到趋势变量
-        # _,trend_init = self.decompsition(x)
-
-        # redusial = x.permute(0, 2, 1) - seasonal_init - trend_init
+        trend_init = trend_init.permute(0, 2, 1)
+        seasonal_init = seasonal_init.permute(0, 2, 1)
 
         # 使用线性层
         if self.individual:

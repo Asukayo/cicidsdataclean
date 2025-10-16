@@ -62,9 +62,6 @@ class channel_mask_generator(torch.nn.Module):
         # 新形状[(b*c*d) x 1] 每个概率值独立处理
         flatten_matrix = rearrange(distribution_matrix, 'b c d -> (b c d) 1')
 
-        # 在 _bernoulli_gumbel_rsample 中添加 clipping
-        flatten_matrix = torch.clamp(flatten_matrix, min=1e-7, max=1 - 1e-7)
-
         # 计算互补概率
         # 用于构造二项分布的两个状态
         r_flatten_matrix = 1 - flatten_matrix
