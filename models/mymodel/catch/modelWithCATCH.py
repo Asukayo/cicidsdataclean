@@ -64,8 +64,8 @@ class Model(nn.Module):
         self.seasonal_channel_mask_generator = channel_mask_generator(num_seq=100,n_vars=38)
         self.trend_channel_mask_generator = channel_mask_generator(num_seq=100, n_vars=38)
         # 构建通道注意力模块
-        self.seasonal_cross_channel_transformer = Trans_C(dim = 128,depth=4,heads=8,mlp_dim=256,dim_head=64,dropout=0.7,patch_dim=100,temperature=0.5,d_model=self.feature_dim)
-        self.trend_cross_channel_transformer = Trans_C(dim = 128,depth=4,heads=8,mlp_dim=256,dim_head=64,dropout=0.7,patch_dim=100,temperature=0.5,d_model=self.feature_dim)
+        self.seasonal_cross_channel_transformer = Trans_C(dim = 128,depth=2,heads=8,mlp_dim=256,dim_head=64,dropout=0.7,patch_dim=100,temperature=0.4,d_model=self.feature_dim)
+        self.trend_cross_channel_transformer = Trans_C(dim = 128,depth=2,heads=8,mlp_dim=256,dim_head=64,dropout=0.7,patch_dim=100,temperature=0.4,d_model=self.feature_dim)
 
         # 添加分类头：将分解后的特征映射到分类结果
         self.classifier = nn.Sequential(

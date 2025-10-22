@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-from models.mymodel.Autoformer.STL_Decompose import STL_Decompose
+from models.mymodel.STLDECOMP.STL_Decompose import STL_Decompose
 
 
 class moving_avg(nn.Module):
@@ -25,11 +25,9 @@ class moving_avg(nn.Module):
         x = self.avg(x.permute(0, 2, 1))
         x = x.permute(0, 2, 1)
         return x
-
 """
     分解模块，将原始时序数据分解为趋势和周期变量，使用移动平均来实现
 """
-
 class series_decomp(nn.Module):
     """
     Series decomposition block
@@ -44,10 +42,6 @@ class series_decomp(nn.Module):
         res = x - moving_mean
         # 修改moving_mean的维度为[batch_size,channels,seq_len]
         return res, moving_mean.permute(0, 2, 1)
-
-
-
-
 class DFT_series_decomp(nn.Module):
     """
     Series decomposition block
@@ -127,7 +121,7 @@ class Model(nn.Module):
         kernel_size = 25
 
         # 定义DFT分解块
-        self.stl_decomp = STL_Decompose(top_k=5,low_freq_ratio=0.4)
+        self.stl_decomp = STL_Decompose(top_k=5,low_freq_ratio=0.4,ma_type='ema')
 
         self.decompsition = series_decomp(kernel_size)
         # 是否对每一个维度的变量使用独立的线性层

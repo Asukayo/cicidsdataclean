@@ -26,6 +26,53 @@ class moving_avg(nn.Module):
         return x
 
 
+class EMA(nn.Module):
+    """
+    Exponential Moving Average (EMA) block to highlight the trend of time series
+    用于提取时间序列的趋势分量
+    """
+
+    def __init__(self, alpha=0.3):
+        super(EMA, self).__init__()
+        # self.alpha = nn.Parameter(alpha)    # Learnable alpha
+        # 将alpha作为固定超参数，论文中使用0.3
+        self.alpha = alpha
+
+    # Optimized implementation with O(1) time complexity
+    def forward(self, x):
+        """
+        输入序列x的格式为 x: [Batch, Input, Channel]
+        Batch:批次大小
+        Input:时间序列长度
+        Channel:特征维度（对于单变量是1）
+        """
+
+        # self.alpha.data.clamp_(0, 1)        # Clamp learnable alpha to [0, 1]
+        # 提取时间序列长度t
+        _, t, _ = x.shape
+        # torch.arange(t, dtype=torch.double)：生成序列[0，1，2，....，t-1],使用double避免数值下溢
+        # torch.flip(..., dims=(0,))：反转序列[t-1,t-2,....,1,0],因为EMA权重需要从最大次幂到0
+        # 示例(t=5):powers = [4,3,2,1,0]
+        powers = torch.flip(torch.arange(t, dtype=torch.double), dims=(0,))
+        # 计算权重基础（1-α）^{powers}
+        weights = torch.pow((1 - self.alpha), powers).to(x.device)
+        # 创建归一化除数,复制权重作为除数，用于后续归一化（确保权重和为1）
+        divisor = weights.clone()
+        # 调整权重，（除了首项外所有权重乘以α）
+        weights[1:] = weights[1:] * self.alpha
+        # 调整张量形状，将形状从[t]变为[1,t,1]
+        # 目的为了与输入[Batch,Input,Channel]进行广播运算
+        weights = weights.reshape(1, t, 1)
+        divisor = divisor.reshape(1, t, 1)
+        # x * weights：逐元素相乘（广播机制）,对于每一个时间步t，数据乘以对应权重
+        # torch.cumsum(..., dim=1)：沿时间维度累积求和
+        x = torch.cumsum(x * weights, dim=1)
+        # 归一化，雏裔累积权重和，保证数值稳定性，相当于标准化操作
+        x = torch.div(x, divisor)
+        # 返回平滑后的序列，即趋势项
+        return x.to(torch.float32)
+
+
 class DFT_series_decomp(nn.Module):
     """
     Series decomposition block
@@ -33,11 +80,15 @@ class DFT_series_decomp(nn.Module):
 
     def __init__(self, top_k=5, low_freq_ratio=0.4):
         super(DFT_series_decomp, self).__init__()
+
         # 保留频谱中最大的前五个频率分量作为季节性成分
         self.top_k = top_k
         self.low_freq_ratio = low_freq_ratio
 
     def forward(self, x):
+        """
+        Batch, Input, Channel
+        """
         # 传入的x:[batch_size,seq_len,features]
         # 在内部进行维度交换
         x = x.permute(0, 2, 1)
@@ -91,9 +142,12 @@ class STL_Decompose(nn.Module):
     混合分解：使用移动平均提取趋势信息，使用DFT提取季节性信息
     """
 
-    def __init__(self, kernel_size = 25, top_k=5, low_freq_ratio=0.5):
+    def __init__(self, kernel_size=25, top_k=5, low_freq_ratio=0.5,ema_alpha=0.3,ma_type='ema'):
         super(STL_Decompose, self).__init__()
-        self.moving_avg = moving_avg(kernel_size=kernel_size, stride=1)
+        if ma_type=='ema':
+            self.moving_avg = EMA(alpha=ema_alpha)
+        elif ma_type=='averagePooling':
+            self.moving_avg = moving_avg(kernel_size=kernel_size, stride=1)
         self.dft_decomp = DFT_series_decomp(top_k=top_k, low_freq_ratio=low_freq_ratio)
 
     def forward(self, x):

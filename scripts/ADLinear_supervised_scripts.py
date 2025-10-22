@@ -8,7 +8,7 @@ import json
 # 导入自定义模块
 # from models.mymodel.MyModel import Model
 #
-from models.mymodel.Autoformer.mmwith_dft_decom import Model
+from models.mymodel.STLDECOMP.mmwith_dft_decom import Model
 
 # from models.ADLinear_supervised import Model
 

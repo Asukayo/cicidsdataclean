@@ -1,4 +1,4 @@
-from models.mymodel.Autoformer.STL_Decompose import STL_Decompose
+from models.mymodel.STLDECOMP.STL_Decompose import STL_Decompose
 import torch
 
 decomp = STL_Decompose(
