@@ -1,6 +1,8 @@
 from torch import nn
 import torch
 
+from models.test.test_STL_Decompse import x_seasonal
+
 
 class moving_avg(nn.Module):
     """
@@ -78,62 +80,65 @@ class DFT_series_decomp(nn.Module):
     Series decomposition block
     """
 
-    def __init__(self, top_k=5, low_freq_ratio=0.4):
+    def __init__(self, top_k=5, low_freq_ratio=0.4,energy_threshold=0.95):
         super(DFT_series_decomp, self).__init__()
 
-        # 保留频谱中最大的前五个频率分量作为季节性成分
+        # 保留频谱中最大的前五个频率分量作为季节性成分(用于最小保留)
         self.top_k = top_k
         self.low_freq_ratio = low_freq_ratio
+
+        # 能量阈值：保留累积能量到达该比例的频率分量（如0.95表示保留95%的能量）
 
     def forward(self, x):
         """
         Batch, Input, Channel
+        返回去除高频噪声后的季节性成分
         """
-        # 传入的x:[batch_size,seq_len,features]
-        # 在内部进行维度交换
+        # 维度变换：[batch,input,channels] -> [batch,channels,input]
         x = x.permute(0, 2, 1)
-        # 假设传入的x.shape为[[64, 38, 100]],batch_size=64, features=38, seq_len=100
 
-        # 对最后一个维度（时间维度）进行实数FFT
-        # xf 是复数张量，包含频域信息
-        xf = torch.fft.rfft(x)  # xf.shape = [64, 38, 51](F = T//2 +1)
+        # 对时间维度进行实数FFT
+        xf = torch.fft.rfft(x) #[batch,channels,freq_bins]
+
         # 计算频率幅度谱
-        freq = abs(xf)  # freq.shape = [64, 38, 51]，包含各频率分量的幅度
+        freq = abs(xf)  # shape:[batch,channels,freq_bins]
 
-        # 将DC分量（零频率）设为0，去除常数项影响
-        freq[:, :, 0] = 0
+        # 将DC(零频率)设为0，去除常数项影响
+        freq[:,:,0] = 0
 
-        # 动态确定低频范围，避免高频噪声
+        # ==== 采用能量累积方法识别高频噪声 ====
+        # 1. 计算每个频率分量的能量（幅度的平方）
+        energy = freq ** 2  # shape: [batch, channels, freq_bins]
+
+        # 2.计算总能量
+        total_energy = energy.sum(dim=-1,keepdim=True) # shape: [batch, channels, 1]
+
+        # 3.沿频率维度计算累积能量
+        cumsum_energy = torch.cumsum(energy, dim=-1) # shape: [batch, channels, freq_bins]
+
+        # 4.计算累积能量比例
+        energy_ratio = cumsum_energy / (total_energy + 1e-8) # 避免除零
+
+        # 5.创建掩码：保留累积能量小于等于阈值的频率分量
+        # True表示保留该频率分量，False表示视为高频噪声需要去除
+        energy_mask = energy_ratio <= self.energy_threshold
+
+        # ====== 确保最小频率保留量 ======
         total_freq_bins = freq.shape[-1]
-        low_freq_cutoff = max(self.top_k, int(total_freq_bins * self.low_freq_ratio))
-        low_freq_cutoff = min(low_freq_cutoff, total_freq_bins)
+        min_keep_bins = max(self.top_k,int(total_freq_bins * self.low_freq_ratio))
+        min_keep_bins = min(min_keep_bins, total_freq_bins)
 
-        # 在低频范围内选择top_k分量
-        freq_low = freq[:, :, 1:low_freq_cutoff]  # 从1开始为了排除DC分量
+        # 强制保留前min_keep_bins个低频分量（避免过度滤波）
+        energy_mask[:,:,:min_keep_bins] = True
 
-        if freq_low.shape[-1] < self.top_k:
-            # 如果低频分量不足，使用所有可用分量
-            actual_k = freq_low.shape[-1]
-            top_k_freq, top_list = torch.topk(freq_low, actual_k)
-            top_list = top_list + 1  # 偏移1，因为排除了DC分量
-        else:
-            top_k_freq, top_list = torch.topk(freq_low, self.top_k)
-            top_list = top_list + 1  # 偏移1，因为排除了DC分量
+        # ===== 应用掩码去除高频噪声 =====
+        # 将高频噪声对应的频率分量置零
+        xf_filtered = xf * energy_mask
 
-            # 创建频域滤波器
-        xf_filtered = torch.zeros_like(xf)
-
-        # 向量化索引操作
-        batch_idx = torch.arange(x.shape[0], device=x.device).view(-1, 1, 1)
-        channel_idx = torch.arange(x.shape[1], device=x.device).view(1, -1, 1)
-
-        # 保留选中的频率分量
-        xf_filtered[batch_idx, channel_idx, top_list] = xf[batch_idx, channel_idx, top_list]
-
-        # 逆FFT重构季节性成分
+        # 逆FFT重构季节性成分(已去除高频噪声)
         x_season = torch.fft.irfft(xf_filtered, n=x.shape[-1])
 
-        # 转回[batch, seq_len, features]
+        # 转回原始维度：[batch, features, seq_len] -> [batch, seq_len, features]
         return x_season.permute(0, 2, 1)
 
 
