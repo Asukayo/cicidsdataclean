@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-from models.mymodel.STLDECOMP.STL_Decompose import STL_Decompose
+from models.mymodel.STLDECOMP.STL_Decompose import HybridSeriesDecompose
 
 
 class moving_avg(nn.Module):
@@ -121,7 +121,7 @@ class Model(nn.Module):
         kernel_size = 25
 
         # 定义DFT分解块
-        self.stl_decomp = STL_Decompose(top_k=5,low_freq_ratio=0.4,ma_type='ema')
+        self.stl_decomp = HybridSeriesDecompose(top_k=5,low_freq_ratio=0.4,energy_threshold=0.95,ma_type='ema')
 
         self.decompsition = series_decomp(kernel_size)
         # 是否对每一个维度的变量使用独立的线性层
