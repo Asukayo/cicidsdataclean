@@ -3,7 +3,7 @@ from torch import nn
 
 
 class HybridMDM(nn.Module):
-    def __init__(self, input_shape, k=3, c=2, pool_mode='hybrid', beta=0.5, layernorm=True):
+    def __init__(self, input_shape, k=3, c=2, pool_mode='hybrid', beta=0.7, layernorm=True):
         """
         :param input_shape: 输入形状(seq_len,feature_num)
         :param k:下采样层数（downsampling层数），控制分解的尺度数量
@@ -17,6 +17,9 @@ class HybridMDM(nn.Module):
         # 保存下采样层数
         self.seq_len = input_shape[0]
         self.k = k
+
+        self.pool_mode = pool_mode
+        self.beta = beta
 
         # 构建多尺度结构
         if self.k > 0:
@@ -98,4 +101,87 @@ class HybridMDM(nn.Module):
             # 此处的aplha可以控制残差连接的强度，其值本身没有其他含义
             sample_x[i + 1] = torch.add(sample_x[i + 1], tmp, alpha=1.0)
         # [batch_size, feature_num, seq_len]
+        return sample_x[n - 1]
+
+
+# 自适应池化方式
+
+class AdaptiveMDM(nn.Module):
+    def __init__(self, input_shape, k=3, c=2, layernorm=True):
+        super(AdaptiveMDM, self).__init__()
+        self.seq_len = input_shape[0]
+        self.k = k
+
+        if self.k > 0:
+            self.k_list = [c ** i for i in range(k, 0, -1)]
+
+            # 同时保留两种池化
+            self.avg_pools = nn.ModuleList([
+                nn.AvgPool1d(kernel_size=k, stride=k) for k in self.k_list
+            ])
+            self.max_pools = nn.ModuleList([
+                nn.MaxPool1d(kernel_size=k, stride=k) for k in self.k_list
+            ])
+
+            # ✅ 创新：可学习的池化选择器
+            self.pool_selectors = nn.ModuleList([
+                nn.Sequential(
+                    nn.AdaptiveAvgPool1d(1),  # 全局池化获取序列统计
+                    nn.Flatten(),
+                    nn.Linear(input_shape[1], 1),  # feature_num -> 1
+                    nn.Sigmoid()  # 输出0-1之间的权重
+                )
+                for k in self.k_list
+            ])
+
+            self.linears = nn.ModuleList(
+                [
+                    nn.Sequential(
+                        nn.Linear(self.seq_len // k, self.seq_len // k),
+                        nn.GELU(),
+                        nn.Linear(self.seq_len // k, self.seq_len * c // k),
+                    )
+                    for k in self.k_list
+                ]
+            )
+
+        self.layernorm = layernorm
+        if self.layernorm:
+            self.norm = nn.BatchNorm1d(input_shape[0] * input_shape[-1])
+
+    def forward(self, x):
+        """
+        :param x: [batch_size, feature_num, seq_len]
+        """
+        if self.layernorm:
+            x = self.norm(torch.flatten(x, 1, -1)).reshape(x.shape)
+
+        if self.k == 0:
+            return x
+
+        sample_x = []
+
+        # ✅ 自适应池化：根据数据特性动态选择
+        for i, k in enumerate(self.k_list):
+            # 计算该尺度的选择权重
+            # [batch_size, feature_num, seq_len]
+            weight = self.pool_selectors[i](x)  # [B, C]
+            weight = weight.unsqueeze(-1)  # [B, C, 1]
+
+            # 两种池化结果
+            avg_pooled = self.avg_pools[i](x)
+            max_pooled = self.max_pools[i](x)
+
+            # 自适应混合
+            pooled = weight * avg_pooled + (1 - weight) * max_pooled
+            sample_x.append(pooled)
+
+        sample_x.append(x)
+        n = len(sample_x)
+
+        # 自底向上混合
+        for i in range(n - 1):
+            tmp = self.linears[i](sample_x[i])
+            sample_x[i + 1] = torch.add(sample_x[i + 1], tmp, alpha=1.0)
+
         return sample_x[n - 1]

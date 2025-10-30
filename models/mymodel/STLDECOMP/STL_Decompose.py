@@ -1,5 +1,7 @@
 from torch import nn
 import torch
+from models.mymodel.amd.MDM import HybridMDM
+from models.mymodel.amd.MDM import AdaptiveMDM
 
 class moving_avg(nn.Module):
     """
@@ -138,7 +140,9 @@ class HybridSeriesDecompose(nn.Module):
     混合分解：使用移动平均提取趋势信息，使用DFT提取季节性信息
     """
 
-    def __init__(self, kernel_size=25, top_k=5, low_freq_ratio=0.5,energy_threshold=0.97,ema_alpha=0.4,ma_type='ema'):
+    def __init__(self, kernel_size=25,
+                 top_k=5, low_freq_ratio=0.5,energy_threshold=0.97,ema_alpha=0.4,ma_type='ema',
+                 seq_len = None,features = None):
         super(HybridSeriesDecompose, self).__init__()
         if ma_type=='ema':
             self.moving_avg = EMA(alpha=ema_alpha)
@@ -148,6 +152,13 @@ class HybridSeriesDecompose(nn.Module):
             top_k=top_k,
             low_freq_ratio=low_freq_ratio,
             energy_threshold=energy_threshold)
+        # 对MDM进行初始化操作
+        if seq_len is not None and features is not None:
+            trend_shape = [seq_len, features]
+            self.MDM = AdaptiveMDM(trend_shape)
+        else:
+            self.MDM = None
+
 
     def forward(self, x):
         """
@@ -159,10 +170,16 @@ class HybridSeriesDecompose(nn.Module):
         """
         x_trend = self.moving_avg(x)
 
+        if self.MDM is None:
+            trend_shape = [x_trend.shape[1], x_trend.shape[2]]
+            self.MDM = AdaptiveMDM(trend_shape).to(x.device)
+
+        strengthened_trend = self.MDM(x_trend.permute(0, 2, 1)).permute(0, 2, 1)
+        # 从原始x中去除trend分量
         x_detrended = x - x_trend
 
         x_seasonal = self.dft_decomp(x_detrended)
 
         x_residual = x_detrended - x_seasonal
 
-        return x_trend, x_seasonal, x_residual
+        return strengthened_trend, x_seasonal, x_residual
