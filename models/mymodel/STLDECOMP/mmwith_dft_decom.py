@@ -121,7 +121,10 @@ class Model(nn.Module):
         kernel_size = 25
 
         # 定义DFT分解块
-        self.stl_decomp = HybridSeriesDecompose(top_k=5,low_freq_ratio=0.4,energy_threshold=0.95,ma_type='ema')
+        self.stl_decomp = (
+            HybridSeriesDecompose(
+                top_k=5,low_freq_ratio=0.4,energy_threshold=0.95,ma_type='ema',
+            seq_len=100,features=38))
 
         self.decompsition = series_decomp(kernel_size)
         # 是否对每一个维度的变量使用独立的线性层
@@ -158,16 +161,7 @@ class Model(nn.Module):
         self.classifier = nn.Sequential(
             # 直接进行展平拼接为[,]二维张量
             nn.Linear(self.channels * self.feature_dim * 2, self.num_classes),# *2因为有seasonal+trend
-            # nn.Conv1d(64,32,kernel_size=3,padding=1),
-            # nn.ReLU(),
-            # nn.Dropout(0.1),
 
-            # nn.Linear(64, self.num_classes),
-            # nn.ReLU(),
-            # nn.Dropout(0.1),
-            # # nn.BatchNorm1d(32),
-            # 最终输出二分类结果
-            # nn.Linear(32, self.num_classes)
         )
 
     def forward(self, x):

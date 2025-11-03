@@ -1,6 +1,6 @@
 from torch import nn
 import torch
-from models.mymodel.amd.MDM import HybridMDM
+from models.mymodel.amd.MDM import HybridMDM, EnhancedAdaptiveMDM
 from models.mymodel.amd.MDM import AdaptiveMDM
 
 class moving_avg(nn.Module):
@@ -155,9 +155,7 @@ class HybridSeriesDecompose(nn.Module):
         # 对MDM进行初始化操作
         if seq_len is not None and features is not None:
             trend_shape = [seq_len, features]
-            self.MDM = AdaptiveMDM(trend_shape)
-        else:
-            self.MDM = None
+            self.MDM = EnhancedAdaptiveMDM(trend_shape)
 
 
     def forward(self, x):
