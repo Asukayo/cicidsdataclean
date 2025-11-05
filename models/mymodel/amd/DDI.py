@@ -1,8 +1,9 @@
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 class DDI(nn.Module):
-    def __init__(self, input_shape, dropout=0.2, patch=12, layernorm=True):
+    def __init__(self, input_shape, dropout=0.2, patch=10, layernorm=True):
         """
         input_shape:输入形状(seq_len,feature_num)，其中seq_len是序列长度,feature_num是特征数量
         patch:patch的大小，将序列分割成多个patch进行处理

@@ -71,6 +71,34 @@ class EMA(nn.Module):
         return x.to(torch.float32)
 
 
+class DEMA(nn.Module):
+    """
+    Double Exponential Moving Average (DEMA)
+    DEMA = 2 * EMA(x) - EMA(EMA(x))
+    用于减少EMA的滞后性
+    """
+
+    def __init__(self, alpha=0.3):
+        super(DEMA, self).__init__()
+        self.alpha = alpha
+        # 创建两个EMA实例
+        self.ema1 = EMA(alpha=alpha)
+        self.ema2 = EMA(alpha=alpha)
+
+    def forward(self, x):
+        """
+        x: [Batch, Input, Channel]
+        返回: DEMA平滑后的序列
+        """
+        # 第一次EMA
+        ema_once = self.ema1(x)
+        # 第二次EMA（对第一次EMA的结果再做EMA）
+        ema_twice = self.ema2(ema_once)
+        # DEMA公式：2 * EMA - EMA(EMA)
+        dema = 2 * ema_once - ema_twice
+        return dema
+
+
 class EnergyBasedDFTFilter(nn.Module):
     """
     Series decomposition block
@@ -141,13 +169,15 @@ class HybridSeriesDecompose(nn.Module):
     """
 
     def __init__(self, kernel_size=25,
-                 top_k=5, low_freq_ratio=0.5,energy_threshold=0.97,ema_alpha=0.4,ma_type='ema',
+                 top_k=5, low_freq_ratio=0.5,energy_threshold=0.97,ema_alpha=0.3,ma_type='ema',
                  seq_len = None,features = None):
         super(HybridSeriesDecompose, self).__init__()
         if ma_type=='ema':
             self.moving_avg = EMA(alpha=ema_alpha)
-        elif ma_type=='averagePooling':
+        elif ma_type=='sma':
             self.moving_avg = moving_avg(kernel_size=kernel_size, stride=1)
+        elif ma_type=='dema':
+            self.moving_avg = DEMA(alpha=ema_alpha)
         self.dft_decomp = EnergyBasedDFTFilter(
             top_k=top_k,
             low_freq_ratio=low_freq_ratio,
