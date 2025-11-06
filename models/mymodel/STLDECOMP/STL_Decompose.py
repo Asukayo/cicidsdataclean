@@ -198,9 +198,6 @@ class HybridSeriesDecompose(nn.Module):
         """
         x_trend = self.moving_avg(x)
 
-        if self.MDM is None:
-            trend_shape = [x_trend.shape[1], x_trend.shape[2]]
-            self.MDM = AdaptiveMDM(trend_shape).to(x.device)
 
         strengthened_trend = self.MDM(x_trend.permute(0, 2, 1)).permute(0, 2, 1)
         # 从原始x中去除trend分量

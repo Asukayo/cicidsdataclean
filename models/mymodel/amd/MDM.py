@@ -102,10 +102,7 @@ class HybridMDM(nn.Module):
             sample_x[i + 1] = torch.add(sample_x[i + 1], tmp, alpha=1.0)
         # [batch_size, feature_num, seq_len]
         return sample_x[n - 1]
-
-
 # 自适应池化方式
-
 class AdaptiveMDM(nn.Module):
     def __init__(self, input_shape, k=3, c=2, layernorm=True):
         super(AdaptiveMDM, self).__init__()
