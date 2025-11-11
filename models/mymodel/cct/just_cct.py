@@ -150,7 +150,7 @@ class c_Transformer(nn.Module):
 class Trans_C(nn.Module):
     """跨通道Transformer主接口 - 简化版"""
 
-    def __init__(self, *, dim, depth, heads, mlp_dim, dim_head, dropout, patch_dim, d_model):
+    def __init__(self, *, dim, depth, heads, mlp_dim, dim_head, dropout, seq_len, d_model):
         """
         Parameters
         ----------
@@ -165,11 +165,11 @@ class Trans_C(nn.Module):
         """
         super().__init__()
         self.dim = dim
-        self.patch_dim = patch_dim
+        self.seq_len = seq_len
 
         # 输入嵌入层
         self.to_patch_embedding = nn.Sequential(
-            nn.Linear(patch_dim, dim),
+            nn.Linear(seq_len, dim),
             nn.Dropout(dropout)
         )
 
@@ -185,7 +185,7 @@ class Trans_C(nn.Module):
         """
         Parameters
         ----------
-        x : 输入张量，形状 [batch_size, seq_len, patch_dim]
+        x : 输入张量，形状 [batch_size, channels,seq_len]
 
         Returns
         -------
