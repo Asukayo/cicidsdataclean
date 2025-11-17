@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import torch
 
-from models.mymodel.STLDECOMP.STL_Decompose import EMA,moving_avg
+from models.mymodel.STLDECOMP.STL_Decompose import EMA,moving_avg,DEMA
 
 
 def visualize_ema_from_csv(csv_path, alpha=0.3):
@@ -30,7 +30,9 @@ def visualize_ema_from_csv(csv_path, alpha=0.3):
     # 3. 应用EMA
     # ema_module = EMA(alpha=alpha)
     # 引用SMA
-    sma_module = moving_avg(kernel_size=25,stride=1)
+    # sma_module = moving_avg(kernel_size=25,stride=1)
+    # 应用DEMA
+    dema_module = DEMA(alpha=alpha)
 
     # 转换为tensor: [1, seq_len, 1] (batch_size=1, seq_len, num_features=1)
     x_tensor = torch.FloatTensor(x_sample).unsqueeze(0).unsqueeze(-1).to('cuda')
@@ -38,11 +40,14 @@ def visualize_ema_from_csv(csv_path, alpha=0.3):
     # with torch.no_grad():
     #     x_ema = ema_module(x_tensor).cpu().numpy()[0, :, 0]  # [seq_len]
 
+    # with torch.no_grad():
+    #     x_sma = sma_module(x_tensor).cpu().numpy()[0, :, 0]  # [seq_len]
+
     with torch.no_grad():
-        x_sma = sma_module(x_tensor).cpu().numpy()[0, :, 0]  # [seq_len]
+        x_dema = dema_module(x_tensor).cpu().numpy()[0, :, 0]  # [seq_len]
 
     # 4. 计算Seasonality（周期性成分）
-    seasonality = x_sample - x_sma
+    seasonality = x_sample - x_dema
 
     # 5. 绘图 - 三个子图
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
@@ -59,10 +64,10 @@ def visualize_ema_from_csv(csv_path, alpha=0.3):
     axes[0].grid(True, alpha=0.3)
 
     # 子图2: EMA趋势
-    axes[1].plot(time_steps, x_sma,
+    axes[1].plot(time_steps, x_dema,
                  linewidth=1.5, color='steelblue', label='Trend')
-    # axes[1].set_title(f'EMA Decomposition (alpha = {alpha})', fontsize=12, fontweight='bold')
-    axes[1].set_title(f'SMA Decomposition', fontsize=12, fontweight='bold')
+    axes[1].set_title(f'DEMA Decomposition (alpha = {alpha})', fontsize=12, fontweight='bold')
+    # axes[1].set_title(f'SMA Decomposition', fontsize=12, fontweight='bold')
     axes[1].set_xlabel('Time Step')
     axes[1].set_ylabel('Value')
     axes[1].legend(loc='upper left')
@@ -71,8 +76,8 @@ def visualize_ema_from_csv(csv_path, alpha=0.3):
     # 子图3: 周期性成分
     axes[2].plot(time_steps, seasonality,
                  linewidth=1.5, color='orangered', label='Seasonality')
-    # axes[2].set_title(f'EMA Decomposition (alpha = {alpha})', fontsize=12, fontweight='bold')
-    axes[2].set_title(f'SMA Decomposition', fontsize=12, fontweight='bold')
+    axes[2].set_title(f'DEMA Decomposition (alpha = {alpha})', fontsize=12, fontweight='bold')
+    # axes[2].set_title(f'SMA Decomposition', fontsize=12, fontweight='bold')
     axes[2].set_xlabel('Time Step')
     axes[2].set_ylabel('Value')
     axes[2].legend(loc='upper left')
