@@ -92,19 +92,21 @@ class LightweightTCN(nn.Module):
         for i in range(num_levels):
             # TCN的核心设计，通过指数增长的膨胀率，可以用对数级别的层数达到指数级别的感受野
             dilation_size = 2 ** i  # 指数增长：1, 2, 4, 8...
-
+            # 确定输入输出的通道数
             in_channels = num_inputs if i == 0 else num_channels[i - 1]
             out_channels = num_channels[i]
-
+            # 确定padding大小
             padding = (kernel_size - 1) * dilation_size
-
+            # 实例化一个TemporalBlock并添加到layers列表
             layers.append(
                 TemporalBlock(
+                    # stride = 1:不进行下采样，保持时间维度
                     in_channels, out_channels, kernel_size,
                     stride=1, dilation=dilation_size,
                     padding=padding, dropout=dropout
                 )
             )
+        # 循环结束后layers包含num_levels个TemporalBlock
 
         self.network = nn.Sequential(*layers)
 
@@ -112,6 +114,8 @@ class LightweightTCN(nn.Module):
         """
         x: [Batch, Channels, Num_seq]
         输出: [Batch, Channels, Num_seq]
+        通道数由C_in变为C_out
+        时间维度由于因果卷积+Chomp1d的作用保持不变
         """
         return self.network(x)
 
@@ -234,6 +238,7 @@ class TCNWithSelfAttentionGate(nn.Module):
         """
         super(TCNWithSelfAttentionGate, self).__init__()
 
+
         # TCN模块
         self.tcn = LightweightTCN(
             num_inputs=channels,
@@ -245,6 +250,7 @@ class TCNWithSelfAttentionGate(nn.Module):
         # 维度对齐（如果TCN改变了通道数）
         final_tcn_channels = tcn_channels[-1]
         self.channel_align = None
+        # 使用1x1卷积模块，改变通道数，将通道数重新转为38维
         if final_tcn_channels != channels:
             self.channel_align = nn.Conv1d(final_tcn_channels, channels, 1)
 

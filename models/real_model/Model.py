@@ -30,8 +30,8 @@ class Model(nn.Module):
         # 定义DFT分解块
         self.stl_decomp = (
             HybridSeriesDecompose(
-                top_k=5,low_freq_ratio=0.4,energy_threshold=0.8,ma_type='dema',
-                ema_alpha=0.3,
+                top_k=5,low_freq_ratio=0.4,energy_threshold=0.8,ma_type='sma',
+                ema_alpha=0.2,
             seq_len=100,features=38))
          # 通道数，即输入数据维度大小
         self.channels = configs.enc_in
