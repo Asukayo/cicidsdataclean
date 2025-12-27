@@ -90,12 +90,62 @@ def val_epoch(model,val_loader,criterion,device='cuda'):
         accuracy = accuracy_score(all_labels,all_preds)
         # 计算精确率 average='weighted'：按类别样本数加权平均
         #           zero_division=0：处理除零情况（当某类别无预测样本时）
-        precision = precision_score(all_labels,all_preds,average='macro')
+        precision = precision_score(all_labels,all_preds,average='binary',zero_division=0)
 
         # average='weighted'
-        recall = recall_score(all_labels,all_preds,average='macro',zero_division=0)
+        recall = recall_score(all_labels,all_preds,average='binary',zero_division=0)
 
-        f1 = f1_score(all_labels,all_preds,average='macro',zero_division=0)
+        f1 = f1_score(all_labels,all_preds,average='binary',zero_division=0)
 
         return avg_loss,accuracy,precision,recall,f1
 
+
+def test_with_detailed_metrics(model, test_loader, criterion, device='cuda'):
+    """测试并返回详细指标（包括PR-AUC和混淆矩阵）"""
+    from sklearn.metrics import precision_recall_curve, auc, confusion_matrix
+    import numpy as np
+
+    model.eval()
+    total_loss = 0
+    all_preds = []
+    all_labels = []
+    all_probs = []  # 存储正类概率
+
+    with torch.no_grad():
+        for batch_X, batch_X_mark, batch_y in test_loader:
+            batch_X = batch_X.to(device)
+            batch_y = batch_y.squeeze().to(device)
+
+            output = model(batch_X)
+            loss = criterion(output, batch_y)
+            total_loss += loss.item()
+
+            # 获取预测标签
+            preds = torch.argmax(output, dim=1).cpu().numpy()
+            all_preds.extend(preds)
+            all_labels.extend(batch_y.cpu().numpy())
+
+            # 获取正类(class=1)的概率用于PR-AUC
+            probs = torch.softmax(output, dim=1)[:, 1].cpu().numpy()
+            all_probs.extend(probs)
+
+    # 转换为numpy数组
+    all_labels = np.array(all_labels)
+    all_preds = np.array(all_preds)
+    all_probs = np.array(all_probs)
+
+    # 计算基本指标
+    avg_loss = total_loss / len(test_loader)
+    accuracy = accuracy_score(all_labels, all_preds)
+    precision = precision_score(all_labels, all_preds, average='binary')
+    recall = recall_score(all_labels, all_preds, average='binary', zero_division=0)
+    f1 = f1_score(all_labels, all_preds, average='binary', zero_division=0)
+
+    # 计算PR-AUC
+    precision_curve, recall_curve, _ = precision_recall_curve(all_labels, all_probs)
+    pr_auc = auc(recall_curve, precision_curve)
+
+    # 计算混淆矩阵
+    cm = confusion_matrix(all_labels, all_preds)
+
+    return avg_loss, accuracy, precision, recall, f1, pr_auc, cm

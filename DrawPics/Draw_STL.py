@@ -1,213 +1,162 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
 import torch
-import sys
-import os
 
-# 添加路径以导入模块
-from dataprovider.provider_6_1_3 import load_data, split_data_chronologically
-from models.mymodel.STLDECOMP.STL_Decompose import EMA
+from models.mymodel.STLDECOMP.STL_Decompose import EMA, EnergyBasedDFTFilter
 
 
-def select_sample_with_anomaly(X, y, sample_type='malicious', random_select=True, seed=None):
-    """选择包含异常的样本
+def generate_synthetic_timeseries(seq_len=150, seed=42):
+    """生成合成时间序列数据（论文展示版）"""
+    np.random.seed(seed)
+    t = np.arange(seq_len)
 
-    Args:
-        X: 特征数据
-        y: 标签数据
-        sample_type: 样本类型，'malicious' 或 'normal'
-        random_select: 是否随机选择样本（True=每次不同，False=固定选择中间样本）
-        seed: 随机种子，用于复现结果（仅在random_select=True时有效）
+    # 趋势分量
+    trend = 0.03 * t + 50
+
+    # 低频季节性（两个明显周期）
+    seasonal = 8.0 * np.sin(2 * np.pi * t / 30) + 4.0 * np.sin(2 * np.pi * t / 60)
+
+    # 高频噪声
+    noise = 2.0 * np.random.randn(seq_len)
+
+    return trend + seasonal + noise
+
+
+def paper_visualization(alpha=0.25, energy_threshold=0.65):
     """
-    if sample_type == 'malicious':
-        # 找到包含恶意流量的窗口
-        malicious_indices = np.where(np.any(y > 0, axis=1))[0]
-        if len(malicious_indices) > 0:
-            if random_select:
-                if seed is not None:
-                    np.random.seed(seed)
-                return np.random.choice(malicious_indices)
-            else:
-                return malicious_indices[len(malicious_indices) // 2]  # 选择中间的恶意样本
-    return 0
+    论文展示专用：生成清晰的DFT分解可视化
 
-
-def find_top_varying_features(x, top_k=3, selection_mode='trend'):
-    """找出最适合展示的特征
-
-    Args:
-        x: [seq_len, num_features]
-        top_k: 返回前K个特征
-        selection_mode: 'variance' - 仅考虑方差
-                       'trend' - 考虑趋势性和平滑度（推荐）
-    """
-    if selection_mode == 'variance':
-        # 原始方法：仅考虑方差
-        feature_std = np.std(x, axis=0)
-        top_indices = np.argsort(feature_std)[-top_k:][::-1]
-        return top_indices
-
-    elif selection_mode == 'trend':
-        # 新方法：综合考虑趋势性、平滑度和方差
-        seq_len, num_features = x.shape
-        time_steps = np.arange(seq_len)
-
-        scores = []
-        for feat_idx in range(num_features):
-            feature_data = x[:, feat_idx]
-
-            # 1. 计算方差（归一化到0-1）
-            variance = np.var(feature_data)
-
-            # 2. 计算线性趋势强度（R²值）
-            if variance > 1e-10:  # 避免除零
-                # 线性回归
-                coeffs = np.polyfit(time_steps, feature_data, 1)
-                trend_line = np.polyval(coeffs, time_steps)
-                # R² = 1 - (SS_res / SS_tot)
-                ss_res = np.sum((feature_data - trend_line) ** 2)
-                ss_tot = np.sum((feature_data - np.mean(feature_data)) ** 2)
-                r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-                r_squared = max(0, r_squared)  # R²可能为负，取max
-            else:
-                r_squared = 0
-
-            # 3. 计算平滑度（通过一阶差分的标准差衡量，值越小越平滑）
-            diff = np.diff(feature_data)
-            diff_std = np.std(diff)
-            # 归一化：平滑度分数 = 1 / (1 + diff_std/variance)
-            smoothness = 1.0 / (1.0 + diff_std / (np.sqrt(variance) + 1e-10))
-
-            # 4. 综合得分（权重可调）
-            # 高方差 + 高趋势性 + 适度平滑 = 好的可视化特征
-            score = (
-                    0.1 * (variance / (np.max(np.var(x, axis=0)) + 1e-10)) +  # 方差权重30%
-                    0.5 * r_squared +  # 趋势性权重50%
-                    0.2 * smoothness  # 平滑度权重20%
-            )
-            scores.append(score)
-
-        # 返回得分最高的top_k个特征
-        scores = np.array(scores)
-        top_indices = np.argsort(scores)[-top_k:][::-1]
-        return top_indices
-
-    else:
-        raise ValueError(f"Unknown selection_mode: {selection_mode}")
-
-
-def visualize_stl_decomposition(data_dir, window_size=100, step_size=20, alpha=0.3,
-                                top_k=3, random_select=True, seed=None,
-                                normalize=False, selection_mode='trend'):
-    """可视化原始数据与STL分解（Trend + Seasonal）
-
-    Args:
-        data_dir: 数据目录
-        window_size: 窗口大小
-        step_size: 步长
+    参数:
         alpha: EMA平滑系数
-        top_k: 显示前K个变化最显著的特征
-        random_select: 是否随机选择样本
-        seed: 随机种子
-        normalize: 是否对数据进行标准化
-        selection_mode: 特征选择模式 ('variance' 或 'trend')
+        energy_threshold: DFT能量阈值（越低分离越激进）
     """
 
-    if seed is not None:
-        np.random.seed(seed)
+    print("Generating synthetic time series for paper...")
+    x_sample = generate_synthetic_timeseries(seq_len=150)
 
-    # 1. 加载数据
-    print("Loading data...")
-    X, y, metadata = load_data(data_dir, window_size, step_size)
+    # 保存数据
+    df = pd.DataFrame({'time': np.arange(len(x_sample)), 'value': x_sample})
+    df.to_csv('paper_synthetic_data.csv', index=False)
+    print(f"✓ Data saved: paper_synthetic_data.csv")
+    print(f"  - Sequence length: {len(x_sample)}")
+    print(f"  - Value range: [{x_sample.min():.2f}, {x_sample.max():.2f}]")
 
-    # 2. 选择一个包含异常的样本
-    sample_idx = select_sample_with_anomaly(X, y, sample_type='malicious',
-                                            random_select=random_select, seed=seed)
-    x_sample = X[sample_idx]  # Shape: [seq_len, num_features]
-    y_sample = y[sample_idx]
-
-    print(f"Selected sample {sample_idx}: shape={x_sample.shape}")
-    print(f"Label distribution: {np.bincount(y_sample.astype(int))}")
-
-    # 2.5 数据标准化（如果启用）
-    if normalize:
-        from sklearn.preprocessing import StandardScaler
-        scaler = StandardScaler()
-        x_sample_original = x_sample.copy()  # 保存原始数据用于显示
-        x_sample = scaler.fit_transform(x_sample)
-        print("Data normalized using StandardScaler (Z-score)")
-
-    # 3. 找出最适合展示的特征
-    top_features = find_top_varying_features(x_sample, top_k=top_k,
-                                             selection_mode=selection_mode)
-    print(f"Top {top_k} features (mode={selection_mode}): {top_features}")
-
-    # 4. 使用EMA提取趋势
+    # EMA趋势提取
     ema_module = EMA(alpha=alpha)
-    x_tensor = torch.FloatTensor(x_sample).unsqueeze(0).to('cuda')
+    x_tensor = torch.FloatTensor(x_sample).unsqueeze(0).unsqueeze(-1).to('cuda')
 
     with torch.no_grad():
-        x_trend = ema_module(x_tensor).cpu().numpy()[0]  # [seq_len, num_features]
+        # 提取趋势
+        x_trend = ema_module(x_tensor)
 
-    # 5. 计算季节性分量：seasonal = original - trend
-    x_seasonal = x_sample - x_trend
+        # 计算Seasonality
+        seasonality_tensor = x_tensor - x_trend
 
-    # 6. 绘图：左边显示原始数据，右边显示Trend + Seasonal
-    fig, axes = plt.subplots(top_k, 2, figsize=(14, 4 * top_k))
+        # DFT分解
+        dft_filter = EnergyBasedDFTFilter(
+            top_k=3,
+            low_freq_ratio=0.25,
+            energy_threshold=energy_threshold
+        ).to('cuda')
 
-    # 处理单个特征的情况
-    if top_k == 1:
-        axes = axes.reshape(1, -1)
+        x_seasonal = dft_filter(seasonality_tensor)  # 低频季节性
+        x_residual = seasonality_tensor - x_seasonal  # 高频残差
 
+        # 转换为numpy
+        seasonality = seasonality_tensor.cpu().numpy()[0, :, 0]
+        x_seasonal_np = x_seasonal.cpu().numpy()[0, :, 0]
+        x_residual_np = x_residual.cpu().numpy()[0, :, 0]
+
+    # ============ 论文展示图：三子图布局 ============
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4.5))
     time_steps = np.arange(len(x_sample))
 
-    for i, feat_idx in enumerate(top_features):
-        # 左图：原始数据
-        axes[i, 0].plot(time_steps, x_sample[:, feat_idx],
-                        linewidth=1.5, color='steelblue', label='Data')
-        axes[i, 0].set_title('Data', fontsize=12, fontweight='bold')
-        axes[i, 0].set_xlabel('Time Step')
-        axes[i, 0].set_ylabel('Value')
-        axes[i, 0].legend(loc='upper left')
-        axes[i, 0].grid(True, alpha=0.3)
+    # 配色方案（专业论文配色）
+    colors = {
+        'seasonality': '#2E86AB',  # 深蓝
+        'low_freq': '#06A77D',  # 绿
+        'high_freq': '#D4552C'  # 橙红
+    }
 
-        # 右图：Trend + Seasonal
-        axes[i, 1].plot(time_steps, x_trend[:, feat_idx],
-                        linewidth=2, color='steelblue', label='Trend')
-        axes[i, 1].plot(time_steps, x_seasonal[:, feat_idx],
-                        linewidth=1.5, color='orangered', label='Seasonality')
-        axes[i, 1].set_title(f'EMA Decomposition (alpha = {alpha})', fontsize=12, fontweight='bold')
-        axes[i, 1].set_xlabel('Time Step')
-        axes[i, 1].set_ylabel('Value')
-        axes[i, 1].legend(loc='upper right')
-        axes[i, 1].grid(True, alpha=0.3)
+    # 子图1: 原始Seasonality（去趋势后）
+    axes[0].plot(time_steps, seasonality,
+                 linewidth=2.5, color=colors['seasonality'],
+                 label='Seasonality', alpha=0.9)
+    axes[0].set_title('(a) Seasonality\n(Data - Trend)',
+                      fontsize=14, fontweight='bold', pad=10)
+    axes[0].set_xlabel('Time Step', fontsize=13)
+    axes[0].set_ylabel('Value', fontsize=13)
+    # axes[0].legend(fontsize=11, framealpha=0.95, loc='upper right')
+    # axes[0].grid(True, alpha=0.3, linestyle='--', linewidth=0.8)
+    axes[0].tick_params(labelsize=11)
+
+    # 子图2: 低频季节性成分
+    axes[1].plot(time_steps, x_seasonal_np,
+                 linewidth=2.5, color=colors['low_freq'],
+                 label='Low-Freq Component', alpha=0.9)
+    axes[1].set_title(f'(b) Low-Frequency\n(Energy ≤ {energy_threshold})',
+                      fontsize=14, fontweight='bold', pad=10)
+    axes[1].set_xlabel('Time Step', fontsize=13)
+    axes[1].set_ylabel('Value', fontsize=13)
+    # axes[1].legend(fontsize=11, framealpha=0.95, loc='upper right')
+    # axes[1].grid(True, alpha=0.3, linestyle='--', linewidth=0.8)
+    axes[1].tick_params(labelsize=11)
+
+    # 子图3: 高频残差（噪声）
+    axes[2].plot(time_steps, x_residual_np,
+                 linewidth=2, color=colors['high_freq'],
+                 label='High-Freq Residual', alpha=0.85)
+    axes[2].set_title('(c) High-Frequency\n(Noise)',
+                      fontsize=14, fontweight='bold', pad=10)
+    axes[2].set_xlabel('Time Step', fontsize=13)
+    axes[2].set_ylabel('Value', fontsize=13)
+    # axes[2].legend(fontsize=11, framealpha=0.95, loc='upper right')
+    # axes[2].grid(True, alpha=0.3, linestyle='--', linewidth=0.8)
+    axes[2].tick_params(labelsize=11)
 
     plt.tight_layout()
-    plt.savefig('stl_decomposition.png', dpi=300, bbox_inches='tight')
-    print("Visualization saved to: stl_decomposition.png")
+
+    # 保存高分辨率图像（适合论文）
+    output_file = 'paper_dft_decomposition.png'
+    plt.savefig(output_file, dpi=300, bbox_inches='tight', facecolor='white')
+    print(f"\n✓ Visualization saved: {output_file}")
+    print(f"  - Resolution: 300 DPI (publication quality)")
+    print(f"  - Format: PNG with white background")
+
+    # 统计信息
+    print("\n" + "=" * 60)
+    print("Decomposition Statistics")
+    print("=" * 60)
+    print(f"Seasonality:      mean={seasonality.mean():>7.4f}, std={seasonality.std():>7.4f}")
+    print(f"Low-Freq (x_s):   mean={x_seasonal_np.mean():>7.4f}, std={x_seasonal_np.std():>7.4f}")
+    print(f"High-Freq (x_r):  mean={x_residual_np.mean():>7.4f}, std={x_residual_np.std():>7.4f}")
+
+    # 能量分布
+    seasonal_energy = (x_seasonal_np.std() ** 2 / seasonality.std() ** 2) * 100
+    residual_energy = (x_residual_np.std() ** 2 / seasonality.std() ** 2) * 100
+    print(f"\nEnergy Distribution:")
+    print(f"  Low-Freq:  {seasonal_energy:>6.2f}%")
+    print(f"  High-Freq: {residual_energy:>6.2f}%")
+    print("=" * 60)
+
     plt.show()
 
 
 if __name__ == "__main__":
-    # 配置参数
-    DATA_DIR = "../cicids2017/selected_features/"  # 修改为实际数据路径
-    WINDOW_SIZE = 100
-    STEP_SIZE = 20
-    ALPHA = 0.3  # EMA平滑系数
-    TOP_K = 3  # 显示前K个变化最显著的特征
+    print("\n" + "=" * 60)
+    print("DFT-Based Seasonality Decomposition")
+    print("Paper Visualization Mode")
+    print("=" * 60 + "\n")
 
-    # 随机选择设置
-    RANDOM_SELECT = True  # True=每次选择不同样本，False=固定选择中间样本
-    SEED = None  # 设置为整数（如42）可复现结果，None则完全随机
+    # 论文展示参数（经过优化）
+    ALPHA = 0.25  # EMA平滑系数
+    ENERGY_THRESHOLD = 0.65  # 能量阈值（控制分离程度）
 
-    # 数据处理设置
-    NORMALIZE = False  # True=标准化数据，False=使用原始数据
+    paper_visualization(
+        alpha=ALPHA,
+        energy_threshold=ENERGY_THRESHOLD
+    )
 
-    # 特征选择模式
-    # 'variance' - 仅考虑方差（原始方法，可能选到脉冲式特征）
-    # 'trend' - 综合考虑趋势性和平滑度（推荐，选择有明显变化趋势的特征）
-    SELECTION_MODE = 'trend'
-
-    visualize_stl_decomposition(DATA_DIR, WINDOW_SIZE, STEP_SIZE, ALPHA, TOP_K,
-                                random_select=RANDOM_SELECT, seed=SEED,
-                                normalize=NORMALIZE, selection_mode=SELECTION_MODE)
+    print("\n✓ Paper-ready visualization generated!")
+    print("  Recommended: Use 'paper_dft_decomposition.png' in your manuscript\n")

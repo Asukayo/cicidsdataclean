@@ -1,31 +1,94 @@
 from torch import nn
 import torch
-from models.mymodel.amd.MDM import HybridMDM, EnhancedAdaptiveMDM
-from models.mymodel.amd.MDM import AdaptiveMDM
 
-class moving_avg(nn.Module):
-    """
-    Moving average block to highlight the trend of time series
-    """
+class EnhancedAdaptiveMDM(nn.Module):
+    def __init__(self, input_shape, k=3, c=2, layernorm=True):
+        super(EnhancedAdaptiveMDM, self).__init__()
+        self.seq_len = input_shape[0]
+        self.feature_num = input_shape[1]
+        self.k = k
 
-    def __init__(self, kernel_size, stride):
-        super(moving_avg, self).__init__()
-        self.kernel_size = kernel_size
-        self.avg = nn.AvgPool1d(kernel_size=kernel_size, stride=stride, padding=0)
+        if self.k > 0:
+            self.k_list = [c ** i for i in range(k, 0, -1)]
+
+            self.avg_pools = nn.ModuleList([
+                nn.AvgPool1d(kernel_size=k, stride=k) for k in self.k_list
+            ])
+            self.max_pools = nn.ModuleList([
+                nn.MaxPool1d(kernel_size=k, stride=k) for k in self.k_list
+            ])
+
+            # 为每个尺度创建选择器
+            self.pool_selectors = nn.ModuleList([
+                nn.Sequential(
+                    nn.Linear(self.feature_num * 3, 64),
+                    nn.ReLU(),
+                    nn.Dropout(0.2),
+                    nn.Linear(64, 1),
+                    nn.Sigmoid()
+                )
+                for _ in self.k_list
+            ])
+
+            self.linears = nn.ModuleList([
+                nn.Sequential(
+                    nn.Linear(self.seq_len // k, self.seq_len // k),
+                    nn.GELU(),
+                    nn.Linear(self.seq_len // k, self.seq_len * c // k),
+                )
+                for k in self.k_list
+            ])
+
+        self.layernorm = layernorm
+        if self.layernorm:
+            self.norm = nn.BatchNorm1d(input_shape[0] * input_shape[-1])
 
     def forward(self, x):
         """
-        [batch, seq_len, features]
-        return: [batch, seq_len, features]
+        :param x: [batch_size, feature_num, seq_len]
         """
-        # padding on the both ends of time series
-        front = x[:, 0:1, :].repeat(1, (self.kernel_size - 1) // 2, 1)
-        end = x[:, -1:, :].repeat(1, (self.kernel_size - 1) // 2, 1)
-        x = torch.cat([front, x, end], dim=1)
-        x = self.avg(x.permute(0, 2, 1))
-        x = x.permute(0, 2, 1)
-        return x
+        if self.layernorm:
+            x = self.norm(torch.flatten(x, 1, -1)).reshape(x.shape)
 
+        if self.k == 0:
+            return x
+
+        sample_x = []
+
+        for i, k in enumerate(self.k_list):
+            # 先进行池化操作
+            avg_pooled = self.avg_pools[i](x)  # [B, C, L//k]
+            max_pooled = self.max_pools[i](x)  # [B, C, L//k]
+
+            # 对池化后的数据计算统计特征来判断该尺度的特性
+            # 这里我们综合考虑两种池化结果的统计特征
+            pooled_for_stats = (avg_pooled + max_pooled) / 2  # 先取平均作为代表
+
+            # 计算该尺度的统计特征
+            mean = pooled_for_stats.mean(dim=-1)  # [B, C]
+            std = pooled_for_stats.std(dim=-1)  # [B, C]
+            max_val = pooled_for_stats.max(dim=-1)[0]  # [B, C]
+
+            # 拼接统计特征
+            stats = torch.cat([mean, std, max_val], dim=1)  # [B, 3C]
+
+            # 计算该尺度的选择权重
+            weight = self.pool_selectors[i](stats)  # [B, 1]
+            weight = weight.unsqueeze(-1)  # [B, 1, 1]
+
+            # 自适应混合
+            pooled = weight * avg_pooled + (1 - weight) * max_pooled
+            sample_x.append(pooled)
+
+        sample_x.append(x)
+        n = len(sample_x)
+
+        # 自底向上混合
+        for i in range(n - 1):
+            tmp = self.linears[i](sample_x[i])
+            sample_x[i + 1] = torch.add(sample_x[i + 1], tmp, alpha=1.0)
+
+        return sample_x[n - 1]
 
 class EMA(nn.Module):
     """
@@ -69,34 +132,6 @@ class EMA(nn.Module):
         x = torch.div(x, divisor)
         # 返回平滑后的序列，即趋势项
         return x.to(torch.float32)
-
-
-class DEMA(nn.Module):
-    """
-    Double Exponential Moving Average (DEMA)
-    DEMA = 2 * EMA(x) - EMA(EMA(x))
-    用于减少EMA的滞后性
-    """
-
-    def __init__(self, alpha=0.3):
-        super(DEMA, self).__init__()
-        self.alpha = alpha
-        # 创建两个EMA实例
-        self.ema1 = EMA(alpha=alpha)
-        self.ema2 = EMA(alpha=alpha)
-
-    def forward(self, x):
-        """
-        x: [Batch, Input, Channel]
-        返回: DEMA平滑后的序列
-        """
-        # 第一次EMA
-        ema_once = self.ema1(x)
-        # 第二次EMA（对第一次EMA的结果再做EMA）
-        ema_twice = self.ema2(ema_once)
-        # DEMA公式：2 * EMA - EMA(EMA)
-        dema = 2 * ema_once - ema_twice
-        return dema
 
 
 class EnergyBasedDFTFilter(nn.Module):
@@ -169,15 +204,11 @@ class HybridSeriesDecompose(nn.Module):
     """
 
     def __init__(self, kernel_size=25,
-                 top_k=5, low_freq_ratio=0.5,energy_threshold=0.9,ema_alpha=0.3,ma_type='ema',
+                 top_k=5, low_freq_ratio=0.5,energy_threshold=0.97,ema_alpha=0.3,ma_type='ema',
                  seq_len = None,features = None):
         super(HybridSeriesDecompose, self).__init__()
         if ma_type=='ema':
             self.moving_avg = EMA(alpha=ema_alpha)
-        elif ma_type=='sma':
-            self.moving_avg = moving_avg(kernel_size=kernel_size, stride=1)
-        elif ma_type=='dema':
-            self.moving_avg = DEMA(alpha=ema_alpha)
         self.dft_decomp = EnergyBasedDFTFilter(
             top_k=top_k,
             low_freq_ratio=low_freq_ratio,
@@ -198,11 +229,8 @@ class HybridSeriesDecompose(nn.Module):
         """
         x_trend = self.moving_avg(x)
 
-        # 消融实验2：去除MSTE模块
+
         strengthened_trend = self.MDM(x_trend.permute(0, 2, 1)).permute(0, 2, 1)
-
-        # strengthened_trend = x_trend
-
         # 从原始x中去除trend分量
         x_detrended = x - x_trend
 

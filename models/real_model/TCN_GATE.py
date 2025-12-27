@@ -290,9 +290,6 @@ class TCNWithSelfAttentionGate(nn.Module):
         gate_weight, cosine_sim = self.gate(fused, temporal_features)
         # gate_weight: [B, 1, 1], cosine_sim: [B]
 
-        # 消融实验5：固定gate_weight为0.5
-        # gate_weight = 0.5
-
         # 步骤5: 门控融合
         output = (
                 gate_weight * (self.scale_tcn * temporal_features) +

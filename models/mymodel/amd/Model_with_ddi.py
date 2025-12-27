@@ -28,9 +28,10 @@ class Model(nn.Module):
         self.revin = RevIN(num_features=self.feature_dim, affine=True)
 
         # 定义DFT分解块
+        # 消融实验5：去除残差分支
         self.stl_decomp = (
             HybridSeriesDecompose(
-                top_k=5,low_freq_ratio=0.4,energy_threshold=0.8,ma_type='dema',
+                top_k=5,low_freq_ratio=0.4,energy_threshold=0.8,ma_type='ema',
                 ema_alpha=0.3,
             seq_len=100,features=38))
          # 通道数，即输入数据维度大小
@@ -85,10 +86,17 @@ class Model(nn.Module):
         # 使用分解模块，将归一化后的序列分解为季节和趋势变量
         trend_init, seasonal_init, redusial_init = self.stl_decomp(x) # stl 输出的形状为[batch_size,channels,seq_len]
 
+        # 消融实验1：去除HSTD模块
+        # trend_init = x
+        # seasonal_init = x
+        # redusial_init = x
+
         # 交换Input length,Channel维度，使得x变为
         # x :[Batch,Channel,Input length]
         trend_init = trend_init.permute(0, 2, 1)
         seasonal_init = seasonal_init.permute(0, 2, 1)
+
+        # 消融实验5 去除residual分支
         redusial_init = redusial_init.permute(0, 2, 1)
 
         ddi_output = self.DDI_trend(trend_init)
@@ -99,6 +107,8 @@ class Model(nn.Module):
         fused_output,gate_weight,cosine_sim = self.tcn_gate(cross_output,adapted_redusial)
 
         trend_output = self.trend_linear_before_classifier(ddi_output)
+
+        # 消融实验5：去除残差分支
         seasonal_output = self.seasonal_linear_before_classifier(fused_output)
 
         # 将seasonal和trend特征展平并拼接

@@ -32,7 +32,7 @@ def visualize_ema_from_csv(csv_path, alpha=0.3):
     # 引用SMA
     # sma_module = moving_avg(kernel_size=25,stride=1)
     # 应用DEMA
-    dema_module = DEMA(alpha=alpha)
+    dema_module = EMA(alpha=alpha)
 
     # 转换为tensor: [1, seq_len, 1] (batch_size=1, seq_len, num_features=1)
     x_tensor = torch.FloatTensor(x_sample).unsqueeze(0).unsqueeze(-1).to('cuda')
@@ -66,7 +66,7 @@ def visualize_ema_from_csv(csv_path, alpha=0.3):
     # 子图2: EMA趋势
     axes[1].plot(time_steps, x_dema,
                  linewidth=1.5, color='steelblue', label='Trend')
-    axes[1].set_title(f'DEMA Decomposition (alpha = {alpha})', fontsize=12, fontweight='bold')
+    axes[1].set_title(f'EMA Decomposition (alpha = {alpha})', fontsize=12, fontweight='bold')
     # axes[1].set_title(f'SMA Decomposition', fontsize=12, fontweight='bold')
     axes[1].set_xlabel('Time Step')
     axes[1].set_ylabel('Value')
@@ -76,7 +76,7 @@ def visualize_ema_from_csv(csv_path, alpha=0.3):
     # 子图3: 周期性成分
     axes[2].plot(time_steps, seasonality,
                  linewidth=1.5, color='orangered', label='Seasonality')
-    axes[2].set_title(f'DEMA Decomposition (alpha = {alpha})', fontsize=12, fontweight='bold')
+    axes[2].set_title(f'EMA Decomposition (alpha = {alpha})', fontsize=12, fontweight='bold')
     # axes[2].set_title(f'SMA Decomposition', fontsize=12, fontweight='bold')
     axes[2].set_xlabel('Time Step')
     axes[2].set_ylabel('Value')
@@ -98,6 +98,6 @@ def visualize_ema_from_csv(csv_path, alpha=0.3):
 if __name__ == "__main__":
     # 配置参数
     CSV_PATH = "network_traffic_data3.csv"  # 修改为你的CSV文件路径
-    ALPHA = 0.3  # EMA平滑系数
+    ALPHA = 0.4  # EMA平滑系数
 
     visualize_ema_from_csv(CSV_PATH, ALPHA)

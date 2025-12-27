@@ -4,48 +4,90 @@ import torch.optim as optim
 import os
 import json
 
-# 导入自定义模块
-# from models.mymodel.MyModel import Model
-#
-# from models.mymodel.STLDECOMP.mmwith_dft_decom import Model
+# 导入MLP模型
+import torch
+import torch.nn as nn
 
-# from models.mymodel.amd.Model_with_ddi import Model
 
-from models.mymodel.amd.model_change_ddi_to_lstm import Model
+class Model(nn.Module):
+    """
+    MLP模型用于时间序列异常检测
+    将时间序列展平后通过多层感知机进行分类
+    """
+
+    def __init__(self, configs):
+        super(Model, self).__init__()
+        self.seq_len = configs.seq_len  # 100
+        self.enc_in = configs.enc_in  # 38
+        self.num_classes = configs.num_classes  # 2
+
+        # 展平后的输入维度
+        self.input_dim = self.seq_len * self.enc_in  # 100 * 38 = 3800
+
+        # MLP结构：3层全连接网络
+        self.mlp = nn.Sequential(
+            # 第一层: 3800 -> 512
+            nn.Linear(self.input_dim, 512),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+
+            # 第二层: 512 -> 256
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+
+            # 输出层: 256 -> 2
+            nn.Linear(256, self.num_classes)
+        )
+
+    def forward(self, x):
+        """
+        Args:
+            x: (batch_size, seq_len, enc_in)
+        Returns:
+            output: (batch_size, num_classes)
+        """
+        batch_size = x.size(0)
+
+        # 展平时间序列
+        # (batch_size, seq_len, enc_in) -> (batch_size, seq_len * enc_in)
+        x = x.reshape(batch_size, -1)
+
+        # MLP分类
+        output = self.mlp(x)
+
+        return output
 
 from dataprovider.provider_6_1_3 import load_data, split_data_chronologically, create_data_loaders
 from config import CICIDS_WINDOW_SIZE, CICIDS_WINDOW_STEP
-from units.trainer_valder import train_epoch, val_epoch
+from scripts.units.trainer_valder import train_epoch, val_epoch
 
 
 class Config:
-    """DLinear分类器配置"""
+    """MLP分类器配置"""
 
     def __init__(self):
         # 数据配置
         self.seq_len = CICIDS_WINDOW_SIZE  # 100
-        self.enc_in = 38  # 特征数量（important_features_90.txt）
+        self.enc_in = 38  # 特征数量
 
         # 模型配置
-        self.pred_len = 38  # 特征提取维度
         self.num_classes = 2  # 二分类
-        self.individual = False  # 是否独立为每一维度使用独立线性层
 
         # 训练配置
         self.epochs = 50
-        self.batch_size = 128
-        self.learning_rate = 0.00001
+        self.batch_size = 64
+        self.learning_rate = 0.001  # MLP使用标准学习率
         self.weight_decay = 1e-5
         self.patience = 10  # 早停耐心值
 
         # 数据分割
         self.train_ratio = 0.6
-        self.val_ratio = 0.15
+        self.val_ratio = 0.1
 
         # 其他
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        # self.device = 'cpu'
-        self.save_dir = 'checkpoints'
+        self.save_dir = 'checkpoints_mlp'
 
 
 def train_model(configs):
@@ -54,7 +96,7 @@ def train_model(configs):
     os.makedirs(configs.save_dir, exist_ok=True)
 
     # 加载数据
-    data_dir = "../cicids2017/selected_features"
+    data_dir = "../../cicids2017/selected_features"
     X, y, metadata = load_data(data_dir, CICIDS_WINDOW_SIZE, CICIDS_WINDOW_STEP)
 
     # 更新特征数量
@@ -73,7 +115,7 @@ def train_model(configs):
     )
 
     # 创建模型
-    print("\n4. Creating model...")
+    print("\n4. Creating MLP model...")
     model = Model(configs).to(configs.device)
     print(f"Model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
 
@@ -148,36 +190,19 @@ def train_model(configs):
     with open(os.path.join(configs.save_dir, 'train_history.json'), 'w') as f:
         json.dump(train_history, f, indent=2)
 
-    # # 测试最佳模型
-    # print("\n6. Testing best model...")
-    # best_checkpoint = torch.load(os.path.join(configs.save_dir, 'best_model.pth'))
-    # model.load_state_dict(best_checkpoint['model_state_dict'])
-    #
-    # test_loss, test_acc, test_precision, test_recall, test_f1 = val_epoch(
-    #     model, test_loader, criterion, configs.device
-    # )
-    #
-    # print("\n" + "=" * 60)
-    # print("FINAL RESULTS")
-    # print("=" * 60)
-    # print(f"Test Accuracy:      {test_acc:.4f}")
-    # print(f"Test Precision:     {test_precision:.4f}")
-    # print(f"Test Recall:        {test_recall:.4f}")
-    # print(f"Test F1:            {test_f1:.4f}")
-
     # 测试最佳模型
     print("\n6. Testing best model...")
     best_checkpoint = torch.load(os.path.join(configs.save_dir, 'best_model.pth'))
     model.load_state_dict(best_checkpoint['model_state_dict'])
 
-    from units.trainer_valder import test_with_detailed_metrics
+    from scripts.units.trainer_valder import test_with_detailed_metrics
 
     test_loss, test_acc, test_precision, test_recall, test_f1, test_pr_auc, test_cm = test_with_detailed_metrics(
         model, test_loader, criterion, configs.device
     )
 
     print("\n" + "=" * 60)
-    print("FINAL RESULTS")
+    print("FINAL RESULTS (MLP)")
     print("=" * 60)
     print(f"Test Accuracy:      {test_acc:.4f}")
     print(f"Test Precision:     {test_precision:.4f}")
@@ -199,4 +224,4 @@ if __name__ == "__main__":
     # 开始训练
     model, history = train_model(configs)
 
-    print("\nTraining completed!")
+    print("\nMLP Training completed!")

@@ -1,11 +1,11 @@
 import torch
 import torch.nn as nn
-from .STL_Decompose import HybridSeriesDecompose
-from .just_cct import Trans_C
-from .DDI import DDI
+from models.mymodel.STLDECOMP.STL_Decompose import HybridSeriesDecompose
+from models.mymodel.cct.just_cct import Trans_C
+from .LSTM_Baseline import LSTM_Baseline  # 消融实验：使用LSTM替代DDI
 from models.layers.revin import RevIN
-from .TCN_GATE import TCNWithSelfAttentionGate
-from .redusial_seq_len_adapter import SeqLenAdapter
+from ...layers.TCN_GATE import TCNWithSelfAttentionGate
+from ...layers.redusial_seq_len_adapter import SeqLenAdapter
 
 
 class Model(nn.Module):
@@ -28,16 +28,23 @@ class Model(nn.Module):
         self.revin = RevIN(num_features=self.feature_dim, affine=True)
 
         # 定义DFT分解块
+        # 消融实验5：去除残差分支
         self.stl_decomp = (
             HybridSeriesDecompose(
-                top_k=5,low_freq_ratio=0.4,energy_threshold=0.8,ma_type='sma',
-                ema_alpha=0.2,
+                top_k=5,low_freq_ratio=0.4,energy_threshold=0.8,ma_type='ema',
+                ema_alpha=0.3,
             seq_len=100,features=38))
          # 通道数，即输入数据维度大小
         self.channels = configs.enc_in
 
         input_shape = [100,38]
-        self.DDI_trend = DDI(input_shape=input_shape,patch=20,dropout=0.4)
+        # 消融实验：使用LSTM替代DDI
+        self.DDI_trend = LSTM_Baseline(
+            input_shape=input_shape,
+            dropout=0.4,
+            hidden_size=64,  # LSTM隐藏层维度
+            num_layers=2     # LSTM层数
+        )
 
         # 添加通道注意力机制
         self.crosschannelTransformer = (
@@ -85,10 +92,17 @@ class Model(nn.Module):
         # 使用分解模块，将归一化后的序列分解为季节和趋势变量
         trend_init, seasonal_init, redusial_init = self.stl_decomp(x) # stl 输出的形状为[batch_size,channels,seq_len]
 
+        # 消融实验1：去除HSTD模块
+        # trend_init = x
+        # seasonal_init = x
+        # redusial_init = x
+
         # 交换Input length,Channel维度，使得x变为
         # x :[Batch,Channel,Input length]
         trend_init = trend_init.permute(0, 2, 1)
         seasonal_init = seasonal_init.permute(0, 2, 1)
+
+        # 消融实验5 去除residual分支
         redusial_init = redusial_init.permute(0, 2, 1)
 
         ddi_output = self.DDI_trend(trend_init)
@@ -99,6 +113,8 @@ class Model(nn.Module):
         fused_output,gate_weight,cosine_sim = self.tcn_gate(cross_output,adapted_redusial)
 
         trend_output = self.trend_linear_before_classifier(ddi_output)
+
+        # 消融实验5：去除残差分支
         seasonal_output = self.seasonal_linear_before_classifier(fused_output)
 
         # 将seasonal和trend特征展平并拼接

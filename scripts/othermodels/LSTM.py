@@ -4,37 +4,84 @@ import torch.optim as optim
 import os
 import json
 
-# 导入自定义模块
-# from models.mymodel.MyModel import Model
-#
-# from models.mymodel.STLDECOMP.mmwith_dft_decom import Model
 
-# from models.mymodel.amd.Model_with_ddi import Model
+class Model(nn.Module):
+    """
+    LSTM模型用于时间序列异常检测
+    标准双层双向LSTM + 全连接分类层
+    """
 
-from models.mymodel.amd.model_change_ddi_to_lstm import Model
+    def __init__(self, configs):
+        super(Model, self).__init__()
+        self.seq_len = configs.seq_len  # 100
+        self.enc_in = configs.enc_in  # 38
+        self.num_classes = configs.num_classes  # 2
+
+        # LSTM配置
+        self.hidden_size = 128
+        self.num_layers = 2
+        self.dropout = 0.3
+
+        # 双向LSTM层
+        self.lstm = nn.LSTM(
+            input_size=self.enc_in,
+            hidden_size=self.hidden_size,
+            num_layers=self.num_layers,
+            batch_first=True,
+            dropout=self.dropout if self.num_layers > 1 else 0,
+            bidirectional=True
+        )
+
+        # 全连接分类层
+        # 双向LSTM输出维度为 hidden_size * 2
+        self.fc = nn.Sequential(
+            nn.Dropout(self.dropout),
+            nn.Linear(self.hidden_size * 2, self.num_classes)
+        )
+
+    def forward(self, x):
+        """
+        Args:
+            x: (batch_size, seq_len, enc_in)
+        Returns:
+            output: (batch_size, num_classes)
+        """
+        # LSTM前向传播
+        # lstm_out: (batch_size, seq_len, hidden_size*2)
+        lstm_out, (h_n, c_n) = self.lstm(x)
+
+        # 取最后一个时间步的输出
+        # last_output: (batch_size, hidden_size*2)
+        last_output = lstm_out[:, -1, :]
+
+        # 分类
+        output = self.fc(last_output)
+
+        return output
+
+
+
 
 from dataprovider.provider_6_1_3 import load_data, split_data_chronologically, create_data_loaders
 from config import CICIDS_WINDOW_SIZE, CICIDS_WINDOW_STEP
-from units.trainer_valder import train_epoch, val_epoch
+from scripts.units.trainer_valder import train_epoch, val_epoch
 
 
 class Config:
-    """DLinear分类器配置"""
+    """LSTM分类器配置"""
 
     def __init__(self):
         # 数据配置
         self.seq_len = CICIDS_WINDOW_SIZE  # 100
-        self.enc_in = 38  # 特征数量（important_features_90.txt）
+        self.enc_in = 38  # 特征数量
 
         # 模型配置
-        self.pred_len = 38  # 特征提取维度
         self.num_classes = 2  # 二分类
-        self.individual = False  # 是否独立为每一维度使用独立线性层
 
         # 训练配置
         self.epochs = 50
-        self.batch_size = 128
-        self.learning_rate = 0.00001
+        self.batch_size = 64
+        self.learning_rate = 0.001  # LSTM通常使用稍大的学习率
         self.weight_decay = 1e-5
         self.patience = 10  # 早停耐心值
 
@@ -44,8 +91,7 @@ class Config:
 
         # 其他
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        # self.device = 'cpu'
-        self.save_dir = 'checkpoints'
+        self.save_dir = 'checkpoints_lstm'
 
 
 def train_model(configs):
@@ -54,7 +100,7 @@ def train_model(configs):
     os.makedirs(configs.save_dir, exist_ok=True)
 
     # 加载数据
-    data_dir = "../cicids2017/selected_features"
+    data_dir = "../../cicids2017/selected_features"
     X, y, metadata = load_data(data_dir, CICIDS_WINDOW_SIZE, CICIDS_WINDOW_STEP)
 
     # 更新特征数量
@@ -73,7 +119,7 @@ def train_model(configs):
     )
 
     # 创建模型
-    print("\n4. Creating model...")
+    print("\n4. Creating LSTM model...")
     model = Model(configs).to(configs.device)
     print(f"Model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
 
@@ -148,36 +194,19 @@ def train_model(configs):
     with open(os.path.join(configs.save_dir, 'train_history.json'), 'w') as f:
         json.dump(train_history, f, indent=2)
 
-    # # 测试最佳模型
-    # print("\n6. Testing best model...")
-    # best_checkpoint = torch.load(os.path.join(configs.save_dir, 'best_model.pth'))
-    # model.load_state_dict(best_checkpoint['model_state_dict'])
-    #
-    # test_loss, test_acc, test_precision, test_recall, test_f1 = val_epoch(
-    #     model, test_loader, criterion, configs.device
-    # )
-    #
-    # print("\n" + "=" * 60)
-    # print("FINAL RESULTS")
-    # print("=" * 60)
-    # print(f"Test Accuracy:      {test_acc:.4f}")
-    # print(f"Test Precision:     {test_precision:.4f}")
-    # print(f"Test Recall:        {test_recall:.4f}")
-    # print(f"Test F1:            {test_f1:.4f}")
-
     # 测试最佳模型
     print("\n6. Testing best model...")
     best_checkpoint = torch.load(os.path.join(configs.save_dir, 'best_model.pth'))
     model.load_state_dict(best_checkpoint['model_state_dict'])
 
-    from units.trainer_valder import test_with_detailed_metrics
+    from scripts.units.trainer_valder import test_with_detailed_metrics
 
     test_loss, test_acc, test_precision, test_recall, test_f1, test_pr_auc, test_cm = test_with_detailed_metrics(
         model, test_loader, criterion, configs.device
     )
 
     print("\n" + "=" * 60)
-    print("FINAL RESULTS")
+    print("FINAL RESULTS (LSTM)")
     print("=" * 60)
     print(f"Test Accuracy:      {test_acc:.4f}")
     print(f"Test Precision:     {test_precision:.4f}")
@@ -199,4 +228,4 @@ if __name__ == "__main__":
     # 开始训练
     model, history = train_model(configs)
 
-    print("\nTraining completed!")
+    print("\nLSTM Training completed!")
