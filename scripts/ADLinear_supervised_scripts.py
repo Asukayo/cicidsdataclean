@@ -9,13 +9,13 @@ import json
 #
 # from models.mymodel.STLDECOMP.mmwith_dft_decom import Model
 
-# from models.mymodel.amd.Model_with_ddi import Model
+from models.mymodel.amd.Model_with_ddi import Model
 
-from models.mymodel.amd.model_change_ddi_to_lstm import Model
+# from models.mymodel.amd.model_change_ddi_to_lstm import Model
 
 from dataprovider.provider_6_1_3 import load_data, split_data_chronologically, create_data_loaders
 from config import CICIDS_WINDOW_SIZE, CICIDS_WINDOW_STEP
-from units.trainer_valder import train_epoch, val_epoch
+from units.trainer_valder import train_epoch, val_epoch,test_with_detailed_metrics
 
 
 class Config:
@@ -40,7 +40,7 @@ class Config:
 
         # 数据分割
         self.train_ratio = 0.6
-        self.val_ratio = 0.15
+        self.val_ratio = 0.2
 
         # 其他
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -170,7 +170,6 @@ def train_model(configs):
     best_checkpoint = torch.load(os.path.join(configs.save_dir, 'best_model.pth'))
     model.load_state_dict(best_checkpoint['model_state_dict'])
 
-    from units.trainer_valder import test_with_detailed_metrics
 
     test_loss, test_acc, test_precision, test_recall, test_f1, test_pr_auc, test_cm = test_with_detailed_metrics(
         model, test_loader, criterion, configs.device

@@ -40,7 +40,7 @@ sns.heatmap(cm_mymodel, annot=True, fmt='d', cmap='Blues',
 
 axes[0].set_xlabel('Predicted Label', fontsize=13, fontweight='bold')
 axes[0].set_ylabel('True Label', fontsize=13, fontweight='bold')
-axes[0].set_title(f'MyModel\nP={p_mymodel:.3f}  R={r_mymodel:.3f}  F1={f1_mymodel:.3f}',
+axes[0].set_title(f'WSTD\nP={p_mymodel:.3f}  R={r_mymodel:.3f}  F1={f1_mymodel:.3f}',
                   fontsize=14, fontweight='bold', pad=15)
 axes[0].set_xticklabels(['Normal', 'Attack'], fontsize=11)
 axes[0].set_yticklabels(['Normal', 'Attack'], fontsize=11, rotation=0)
@@ -64,7 +64,7 @@ print("混淆矩阵对比图已保存至: confusion_matrix_comparison.png")
 
 # 打印两个模型的详细信息
 print("\n" + "="*50)
-print("MyModel:")
+print("WSTD:")
 print("="*50)
 TN, FP = cm_mymodel[0]
 FN, TP = cm_mymodel[1]

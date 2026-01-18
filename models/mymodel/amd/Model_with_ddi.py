@@ -33,12 +33,12 @@ class Model(nn.Module):
             HybridSeriesDecompose(
                 top_k=5,low_freq_ratio=0.4,energy_threshold=0.8,ma_type='ema',
                 ema_alpha=0.3,
-            seq_len=100,features=38))
+            seq_len=configs.seq_len,features=38))
          # 通道数，即输入数据维度大小
         self.channels = configs.enc_in
 
-        input_shape = [100,38]
-        self.DDI_trend = DDI(input_shape=input_shape,patch=20,dropout=0.4)
+        input_shape = [configs.seq_len,38]
+        self.DDI_trend = DDI(input_shape=input_shape,patch=25,dropout=0.4)
 
         # 添加通道注意力机制
         self.crosschannelTransformer = (
@@ -48,7 +48,7 @@ class Model(nn.Module):
                     mlp_dim=256,
                     dim_head=64,
                     dropout=0.6,
-                    seq_len=100,
+                    seq_len=configs.seq_len,
                     d_model=self.cct_output_len))
 
         # 调整Redusial的seq_len维度与cross_channel_Transformer的seq_len维度相匹配
@@ -66,7 +66,7 @@ class Model(nn.Module):
         )
 
         # 用于在分类器前调整linear和seasonal维度大小
-        self.trend_linear_before_classifier = nn.Linear(100, self.feature_dim)
+        self.trend_linear_before_classifier = nn.Linear(self.seq_len, self.feature_dim)
         self.seasonal_linear_before_classifier = nn.Linear(self.cct_output_len, self.feature_dim)
 
         # 添加分类头：将分解后的特征映射到分类结果
