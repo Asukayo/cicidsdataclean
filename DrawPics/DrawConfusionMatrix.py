@@ -29,37 +29,37 @@ tn_treemil = total_negative - fp_treemil
 cm_treemil = np.array([[tn_treemil, fp_treemil],
                         [fn_treemil, tp_treemil]])
 
-# 创建图形：包含两个子图
-fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+# 创建图形：增大尺寸以容纳更大字体
+fig, axes = plt.subplots(1, 2, figsize=(18, 7))
 
-# 左图：MyModel
+# 左图：MyModel - 增大数字字体
 sns.heatmap(cm_mymodel, annot=True, fmt='d', cmap='Blues',
             cbar=True, square=True, linewidths=2, linecolor='black',
-            annot_kws={'size': 16, 'weight': 'bold'},
+            annot_kws={'size': 20, 'weight': 'bold'},
             cbar_kws={'label': 'Count'}, ax=axes[0])
 
-axes[0].set_xlabel('Predicted Label', fontsize=13, fontweight='bold')
-axes[0].set_ylabel('True Label', fontsize=13, fontweight='bold')
+axes[0].set_xlabel('Predicted Label', fontsize=17, fontweight='bold')
+axes[0].set_ylabel('True Label', fontsize=17, fontweight='bold')
 axes[0].set_title(f'WSTD\nP={p_mymodel:.3f}  R={r_mymodel:.3f}  F1={f1_mymodel:.3f}',
-                  fontsize=14, fontweight='bold', pad=15)
-axes[0].set_xticklabels(['Normal', 'Attack'], fontsize=11)
-axes[0].set_yticklabels(['Normal', 'Attack'], fontsize=11, rotation=0)
+                  fontsize=16, fontweight='bold', pad=15)
+axes[0].set_xticklabels(['Normal', 'Attack'], fontsize=16)
+axes[0].set_yticklabels(['Normal', 'Attack'], fontsize=16, rotation=0)
 
-# 右图：TreeMIL
+# 右图：TreeMIL - 同样增大字体
 sns.heatmap(cm_treemil, annot=True, fmt='d', cmap='Oranges',
             cbar=True, square=True, linewidths=2, linecolor='black',
-            annot_kws={'size': 16, 'weight': 'bold'},
+            annot_kws={'size': 20, 'weight': 'bold'},
             cbar_kws={'label': 'Count'}, ax=axes[1])
 
-axes[1].set_xlabel('Predicted Label', fontsize=13, fontweight='bold')
-axes[1].set_ylabel('True Label', fontsize=13, fontweight='bold')
+axes[1].set_xlabel('Predicted Label', fontsize=17, fontweight='bold')
+axes[1].set_ylabel('True Label', fontsize=17, fontweight='bold')
 axes[1].set_title(f'TreeMIL\nP={p_treemil:.3f}  R={r_treemil:.3f}  F1={f1_treemil:.3f}',
-                  fontsize=14, fontweight='bold', pad=15)
-axes[1].set_xticklabels(['Normal', 'Attack'], fontsize=11)
-axes[1].set_yticklabels(['Normal', 'Attack'], fontsize=11, rotation=0)
+                  fontsize=16, fontweight='bold', pad=15)
+axes[1].set_xticklabels(['Normal', 'Attack'], fontsize=16)
+axes[1].set_yticklabels(['Normal', 'Attack'], fontsize=16, rotation=0)
 
-plt.tight_layout()
-plt.savefig('./confusion_matrix_comparison.png', dpi=300, bbox_inches='tight')
+plt.tight_layout(pad=3.0)
+plt.savefig('./confusion_matrix_comparison.png', dpi=300, bbox_inches='tight', pad_inches=0.3)
 print("混淆矩阵对比图已保存至: confusion_matrix_comparison.png")
 
 # 打印两个模型的详细信息
