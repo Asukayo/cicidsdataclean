@@ -1,20 +1,16 @@
 """
-无监督异常检测 · 标准训练脚本
-==============================
-特性：
-  - 模型可即时替换（实现 BaseAnomalyModel 接口即可）
-  - POT（Peak Over Threshold / 极值理论）阈值策略
-  - 评估指标：F1, Precision, Recall, AUC-ROC, AUC-PR
+无监督异常检测 · 自适应频率加权模型训练脚本
+=============================================
+基于 TCNaddMaskScript.py 修改，专为 withAutoFreqWeights 模型设计。
+新增功能：在训练结束后，自动提取并保存模型学习到的频率不确定性参数 (log_var)，供论文画图使用。
 
 用法：
-  python train_unsupervised.py --data_dir /path/to/data --model OmniAnomaly
+  python train_auto_freq.py --data_dir /path/to/data --model TCNAE_AutoFreq
 """
 
 import argparse
 import json
 import os
-
-
 
 import numpy as np
 import torch
@@ -27,9 +23,7 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from tqdm import tqdm
-from sklearn.metrics import precision_recall_curve
-import numpy as np
-
+from scipy.stats import rankdata
 from secondPaper.provider.unsupervised_provider import (
     create_data_loaders,
     load_data,
@@ -37,13 +31,15 @@ from secondPaper.provider.unsupervised_provider import (
     split_data_unsupervised,
 )
 
-# ─── 新模型只需 import 并注册到此处 ───
 from secondPaper.models.OmniAnomaly import OmniAnomaly
-from secondPaper.models.TCN_Autoencoder import TCNAE  # ← 加这行（路径按你的实际文件名）
+from secondPaper.models.TCN_Autoencoder import TCNAE
+# 【修改 1】：导入新的自适应权重模型
+from secondPaper.models.withAutoFreqWeights import TCNAEWithFreq as TCNAE_AutoFreq
 
 MODEL_REGISTRY = {
     'OmniAnomaly': OmniAnomaly,
-    'TCNAE': TCNAE,   # ← 加这行
+    'TCNAE': TCNAE,
+    'TCNAE_AutoFreq': TCNAE_AutoFreq,  # 【修改 2】：更新注册表
 }
 
 
@@ -52,45 +48,24 @@ MODEL_REGISTRY = {
 # ====================================================================
 
 def pot_threshold(scores, q=0.98, risk=1e-4, max_xi=1.0):
-    """
-    使用广义 Pareto 分布拟合尾部超额分布，推导异常阈值。
-    增加安全约束，防止重尾爆炸。
-
-    Args:
-        scores: 1-D array, 训练集（纯正常）的异常分数
-        q:      初始阈值百分位数 (0, 1)
-        risk:   期望误报概率
-        max_xi: ξ 上界，超过则截断（ξ>1 时 GPD 均值发散，不可靠）
-
-    Returns:
-        threshold: float
-    """
-    # Step 1: 初始阈值
     t = np.percentile(scores, q * 100)
-
-    # Step 2: 超额 (exceedances)
     exceedances = scores[scores > t] - t
     if len(exceedances) < 10:
-        print(f"  [POT] 超额样本不足 ({len(exceedances)})，回退到 {q*100:.0f}th 百分位数")
+        print(f"  [POT] 超额样本不足 ({len(exceedances)})，回退到 {q * 100:.0f}th 百分位数")
         return float(t)
 
-    # Step 3: 拟合 GPD
     shape, _, scale = genpareto.fit(exceedances, floc=0)
 
-    # Step 3.5: 安全约束 —— 截断 ξ
     if shape > max_xi:
         print(f"  [POT] ξ={shape:.4f} > {max_xi}，截断为 {max_xi}（原始拟合不可靠）")
         shape = max_xi
 
-    # Step 4: 计算阈值
     N, Nt = len(scores), len(exceedances)
-
     if abs(shape) < 1e-8:
         threshold = t + scale * np.log(Nt / (N * risk))
     else:
         threshold = t + scale / shape * ((Nt / (N * risk)) ** shape - 1)
 
-    # Step 5: 合理性检查 —— 阈值不应超过观测最大值的某个倍数
     score_max = np.max(scores)
     upper_bound = score_max * 3.0
     if threshold > upper_bound:
@@ -101,24 +76,13 @@ def pot_threshold(scores, q=0.98, risk=1e-4, max_xi=1.0):
     print(f"  [POT] threshold={threshold:.6f}, score_range=[{np.min(scores):.6f}, {score_max:.6f}]")
     return float(threshold)
 
+
 # ====================================================================
 #  在测试集上网格搜索最优F1
 # ====================================================================
 
 def best_f1_search(scores, labels, n_steps=1000):
-    """
-    在测试集上网格搜索最优 F1（F1*）
-
-    Args:
-        scores:  1-D array, 异常分数
-        labels:  1-D array, 真实标签
-        n_steps: 搜索粒度
-
-    Returns:
-        dict: best_f1, best_threshold, precision, recall
-    """
     thresholds = np.linspace(scores.min(), scores.max(), n_steps)
-
     best_f1, best_t, best_p, best_r = 0, 0, 0, 0
     for t in thresholds:
         preds = (scores > t).astype(int)
@@ -135,7 +99,6 @@ def best_f1_search(scores, labels, n_steps=1000):
         'precision': float(best_p),
         'recall': float(best_r),
     }
-
 
 
 # ====================================================================
@@ -156,7 +119,7 @@ def train_one_epoch(model, loader, optimizer, device):
 
         optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)  # 加这行
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
         optimizer.step()
 
         total_loss += loss.item()
@@ -187,17 +150,40 @@ def validate(model, loader, device):
 
 @torch.no_grad()
 def compute_scores(model, loader, device):
-    """返回 (scores, labels) 两个 1-D numpy array"""
     model.eval()
     all_scores, all_labels = [], []
+    is_dict = None
 
     for x, x_mark, labels in loader:
         x, x_mark = x.to(device), x_mark.to(device)
-        scores = model.compute_anomaly_score(x, x_mark)
-        all_scores.append(scores.cpu().numpy())
+        s = model.compute_anomaly_score(x, x_mark)
+        if isinstance(s, dict):
+            is_dict = True
+            all_scores.append({k: v.cpu().numpy() for k, v in s.items()})
+        else:
+            is_dict = False
+            all_scores.append(s.cpu().numpy())
         all_labels.append(labels.numpy().squeeze(-1))
 
-    return np.concatenate(all_scores), np.concatenate(all_labels)
+    labels_np = np.concatenate(all_labels)
+    if is_dict:
+        keys = all_scores[0].keys()
+        scores_np = {k: np.concatenate([d[k] for d in all_scores]) for k in keys}
+    else:
+        scores_np = np.concatenate(all_scores)
+    return scores_np, labels_np
+
+
+def fuse_multi_branch_scores(val_scores, test_scores, val_labels):
+    print("\n--- Multi-branch Score Fusion (Rank Fusion) ---")
+
+    def rank_score(s):
+        return (rankdata(s) - 1) / (len(s) - 1)
+
+    def fuse(sdict):
+        return sum(rank_score(sdict[k]) for k in sdict)
+
+    return fuse(val_scores), fuse(test_scores), {}
 
 
 # ====================================================================
@@ -206,15 +192,14 @@ def compute_scores(model, loader, device):
 
 def evaluate(scores, labels, threshold):
     preds = (scores > threshold).astype(int)
-
     has_both = len(np.unique(labels)) > 1
     return {
-        'threshold':  float(threshold),
-        'f1':         float(f1_score(labels, preds, zero_division=0)),
-        'precision':  float(precision_score(labels, preds, zero_division=0)),
-        'recall':     float(recall_score(labels, preds, zero_division=0)),
-        'auc_roc':    float(roc_auc_score(labels, scores)) if has_both else 0.0,
-        'auc_pr':     float(average_precision_score(labels, scores)) if has_both else 0.0,
+        'threshold': float(threshold),
+        'f1': float(f1_score(labels, preds, zero_division=0)),
+        'precision': float(precision_score(labels, preds, zero_division=0)),
+        'recall': float(recall_score(labels, preds, zero_division=0)),
+        'auc_roc': float(roc_auc_score(labels, scores)) if has_both else 0.0,
+        'auc_pr': float(average_precision_score(labels, scores)) if has_both else 0.0,
     }
 
 
@@ -264,7 +249,7 @@ class EarlyStopping:
 
 
 # ====================================================================
-#  模型构建（添加新模型时在此扩展）
+#  模型构建
 # ====================================================================
 
 def build_model(args, device):
@@ -278,14 +263,26 @@ def build_model(args, device):
             n_latent=args.n_latent,
             beta=args.beta,
         )
-    # elif args.model == 'YourNewModel':
-    #     model = cls(...)
     elif args.model == 'TCNAE':
         model = cls(
             input_dim=args.n_features,
             window_size=args.window_size,
             kernel_size=args.tcn_kernel_size,
             dropout=args.tcn_dropout,
+        )
+    elif args.model == 'TCNAE_AutoFreq':  # 【修改 3】：增加对应条件
+        model = cls(
+            input_dim=args.n_features,
+            window_size=args.window_size,
+            kernel_size=args.tcn_kernel_size,
+            dropout=args.tcn_dropout,
+            freq_beta1=args.freq_beta1,
+            freq_beta2=args.freq_beta2,
+            freq_hidden_dim=args.freq_hidden_dim,
+            freq_num_layers=args.freq_num_layers,
+            freq_kernel_size=args.freq_kernel_size,
+            freq_loss_weight=args.freq_loss_weight,
+            freq_infer_segments=args.freq_infer_segments,
         )
     else:
         raise ValueError(f"未注册的模型配置: {args.model}")
@@ -298,12 +295,6 @@ def build_model(args, device):
 # ====================================================================
 
 def main(args):
-    # 固定随机种子
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(args.seed)
-
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Device: {device}")
 
@@ -350,31 +341,36 @@ def main(args):
 
     early_stopping.load_best(model)
 
-    # ── 1. 在整个验证集上获取分数和标签（包含正常与异常） ──
-    val_scores, val_labels = compute_scores(model, val_loader, device)
+    # ── 推理：得到 val / test 分数 ──
+    val_scores_raw, val_labels = compute_scores(model, val_loader, device)
+    test_scores_raw, test_labels = compute_scores(model, test_loader, device)
 
+    # ── 多分支模型：rank 融合 ──
+    fusion_stats = None
+    if isinstance(val_scores_raw, dict):
+        val_scores, test_scores, fusion_stats = fuse_multi_branch_scores(
+            val_scores_raw, test_scores_raw, val_labels
+        )
+    else:
+        val_scores, test_scores = val_scores_raw, test_scores_raw
 
-
-    # ── POT 阈值（仅在验证集的【纯正常数据】上拟合） ──
+    # ── POT 阈值（仅在验证集纯正常数据上拟合） ──
     print("\n--- POT Threshold ---")
-    # 假设标签 0 代表正常，过滤出所有正常窗口的异常分数
     val_normal_scores = val_scores[val_labels == 0]
     if len(val_normal_scores) == 0:
         raise ValueError("验证集中没有正常的窗口数据，无法拟合 POT 阈值！")
-
     threshold = pot_threshold(val_normal_scores, q=args.pot_q, risk=args.pot_risk)
-    # ── 验证集 / 测试集仅用于评估 ──
+
+    # ── 评估 ──
     val_results = evaluate(val_scores, val_labels, threshold)
     print_results(val_results, title='Validation Results')
 
-    test_scores, test_labels = compute_scores(model, test_loader, device)
     test_results = evaluate(test_scores, test_labels, threshold)
     print_results(test_results, title='Test Results')
 
     val_f1_result = best_f1_search(val_scores, val_labels)
     val_threshold = val_f1_result['threshold']
     test_results_val_th = evaluate(test_scores, test_labels, val_threshold)
-    # ↓↓↓ 加这段 ↓↓↓
     print_results(test_results_val_th, title='Test Results (Val Grid-Search Threshold)')
 
     # ── F1*（测试集 oracle threshold）──
@@ -383,10 +379,24 @@ def main(args):
     print(f"  Test F1* (Oracle Threshold)")
     print(f"{'=' * 55}")
     print(f"  Threshold  : {f1_star['threshold']:.6f}")
-    print(f"  F1*        : {f1_star['f1_star']:.4f}")
+    print(f"  F1* : {f1_star['f1_star']:.4f}")
     print(f"  Precision  : {f1_star['precision']:.4f}")
     print(f"  Recall     : {f1_star['recall']:.4f}")
     print(f"{'=' * 55}")
+
+    if isinstance(val_scores_raw, dict):
+        print(f"\n{'=' * 55}")
+        print(f"  Per-branch Metrics (Test, fixed threshold per branch via val grid)")
+        print(f"{'=' * 55}")
+        per_branch = {}
+        for k in val_scores_raw:
+            vb = val_scores_raw[k]
+            tb = test_scores_raw[k]
+            bt = best_f1_search(vb, val_labels)['threshold']
+            per_branch[k] = evaluate(tb, test_labels, bt)
+            print(f"  [{k}]  F1={per_branch[k]['f1']:.4f}  "
+                  f"AUC-ROC={per_branch[k]['auc_roc']:.4f}  "
+                  f"AUC-PR={per_branch[k]['auc_pr']:.4f}")
 
     # ── 保存 ──
     if args.save_dir:
@@ -395,13 +405,24 @@ def main(args):
         torch.save(model.state_dict(), os.path.join(args.save_dir, f'{args.model}_best.pt'))
         np.save(os.path.join(args.save_dir, f'{args.model}_test_scores.npy'), test_scores)
 
+        # 【修改 4】：新增导出学习到的频率权重 log_var，供论文分析画图
+        if hasattr(model, 'freq_log_var'):
+            learned_log_var = model.freq_log_var.detach().cpu().numpy()
+            np.save(os.path.join(args.save_dir, f'{args.model}_learned_freq_log_var.npy'), learned_log_var)
+            print(f"\n  [Feature] 自适应频率不确定性参数 (log_var) 已保存至: {args.model}_learned_freq_log_var.npy")
+            print(f"            在论文中可直接绘制 exp(-log_var) 曲线，证明低频分量被自发降权！")
+
         output = {
             'args': {k: v for k, v in vars(args).items()},
             'val': val_results,
             'test': test_results,
-            'test_val_th': test_results_val_th,  # ← 加这行
-            'f1_star': f1_star,  # ← 顺便也存上
+            'test_val_th': test_results_val_th,
+            'f1_star': f1_star,
         }
+        if fusion_stats is not None:
+            output['fusion_stats'] = fusion_stats
+            output['per_branch_test'] = per_branch
+
         with open(os.path.join(args.save_dir, f'{args.model}_results.json'), 'w') as f:
             json.dump(output, f, indent=2, ensure_ascii=False)
 
@@ -415,49 +436,48 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='无监督异常检测训练脚本')
 
-    # 数据
     g = parser.add_argument_group('Data')
+    g.add_argument('--data_dir', type=str,
+                   default=r"/home/ubuntu/wyh/cicdis/cicids2017/integrated_windows")
+    g.add_argument('--window_size', type=int, default=100)
+    g.add_argument('--step_size', type=int, default=20)
+    g.add_argument('--train_ratio', type=float, default=0.6)
+    g.add_argument('--val_ratio', type=float, default=0.2)
 
-    # 修改以使用完整数据
-    g.add_argument('--data_dir',     type=str,
-                   default= r"/home/ubuntu/wyh/cicdis/cicids2017/integrated_windows")
-
-    # g.add_argument('--data_dir', type=str,
-    #                default=r"D:\Files\GithubResp\cicidsdataclean\cicids2017\integrated_windows")
-
-    g.add_argument('--window_size',  type=int,   default=100)
-    g.add_argument('--step_size',    type=int,   default=20)
-    g.add_argument('--train_ratio',  type=float, default=0.6)
-    g.add_argument('--val_ratio',    type=float, default=0.2)
-
-    # 训练
     g = parser.add_argument_group('Training')
-    # 修改模型时在这里修改即可
-    g.add_argument('--model',      type=str, default='OmniAnomaly', choices=list(MODEL_REGISTRY.keys()))
-    g.add_argument('--batch_size', type=int,   default=128)
-    g.add_argument('--epochs',     type=int,   default=50)
-    # 学习率
-    g.add_argument('--lr',         type=float, default=1e-3)
-    g.add_argument('--patience',   type=int,   default=5)
-    g.add_argument('--seed',       type=int,   default=42)
+    # 【修改 5】：默认参数调整为新的模型名称
+    g.add_argument('--model', type=str, default='TCNAE_AutoFreq',
+                   choices=list(MODEL_REGISTRY.keys()))
+    g.add_argument('--batch_size', type=int, default=128)
+    g.add_argument('--epochs', type=int, default=50)
+    g.add_argument('--lr', type=float, default=1e-3)
+    g.add_argument('--patience', type=int, default=5)
+    g.add_argument('--seed', type=int, default=42)
 
-    # OmniAnomaly 专用
     g = parser.add_argument_group('OmniAnomaly')
-    g.add_argument('--n_hidden', type=int,   default=256)
-    g.add_argument('--n_latent', type=int,   default=64)
-    g.add_argument('--beta',     type=float, default=0.0001)
+    g.add_argument('--n_hidden', type=int, default=256)
+    g.add_argument('--n_latent', type=int, default=64)
+    g.add_argument('--beta', type=float, default=0.0001)
 
-    # TCNAE 专用
     g = parser.add_argument_group('TCNAE')
-    g.add_argument('--tcn_kernel_size', type=int, default=3)
+    g.add_argument('--tcn_kernel_size', type=int, default=7)
     g.add_argument('--tcn_dropout', type=float, default=0.3)
 
-    # POT
-    g = parser.add_argument_group('POT')
-    g.add_argument('--pot_q',    type=float, default=0.95,  help='初始阈值百分位数')
-    g.add_argument('--pot_risk', type=float, default=1e-4,  help='期望误报概率')
+    g = parser.add_argument_group('TCNAE_AutoFreq')  # 【修改 6】：组名同步更新
+    g.add_argument('--freq_beta1', type=float, default=0.2,
+                   help='每样本 mask 比例下界；>0 避免某些样本一个 bin 都不被 mask')
+    g.add_argument('--freq_beta2', type=float, default=0.7)
+    g.add_argument('--freq_hidden_dim', type=int, default=64)
+    g.add_argument('--freq_num_layers', type=int, default=2)
+    g.add_argument('--freq_kernel_size', type=int, default=7)
+    g.add_argument('--freq_loss_weight', type=float, default=0.7)
+    g.add_argument('--freq_infer_segments', type=int, default=25,
+                   help='推理时 rolling mask 的段数；每个 bin 恰被 mask 一次')
 
-    # 输出
+    g = parser.add_argument_group('POT')
+    g.add_argument('--pot_q', type=float, default=0.95, help='初始阈值百分位数')
+    g.add_argument('--pot_risk', type=float, default=1e-5, help='期望误报概率')
+
     g = parser.add_argument_group('Output')
     g.add_argument('--save_dir', type=str, default='./results')
 

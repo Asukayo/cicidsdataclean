@@ -60,9 +60,14 @@ class UnsupervisedTrafficDataset(Dataset):
 
 def load_data(data_dir, window_size=100, step_size=20):
     """加载 .npy 数据文件"""
-    X_file = os.path.join(data_dir, f'selected_X_w{window_size}_s{step_size}.npy')
-    y_file = os.path.join(data_dir, f'selected_y_w{window_size}_s{step_size}.npy')
-    metadata_file = os.path.join(data_dir, f'selected_metadata_w{window_size}_s{step_size}.pkl')
+
+    # X_file = os.path.join(data_dir, f'selected_X_w{window_size}_s{step_size}.npy')
+    # y_file = os.path.join(data_dir, f'selected_y_w{window_size}_s{step_size}.npy')
+
+    X_file = os.path.join(data_dir, f'integrated_X_w{window_size}_s{step_size}.npy')
+    y_file = os.path.join(data_dir, f'integrated_y_w{window_size}_s{step_size}.npy')
+
+    metadata_file = os.path.join(data_dir, f'integrated_metadata_w{window_size}_s{step_size}.pkl')
 
     X = np.load(X_file)
     y = np.load(y_file)
@@ -172,7 +177,8 @@ def print_split_info(split_info):
 # 使用示例
 # ============================================================
 if __name__ == '__main__':
-    DATA_DIR = r"/home/ubuntu/wyh/cicdis/cicids2017/selected_features"  # <-- 修改为你的实际路径
+    # DATA_DIR = r"/home/ubuntu/wyh/cicdis/cicids2017/selected_features"  # <-- 修改为你的实际路径
+    DATA_DIR = r"../cicids2017/selected_features"
     WINDOW_SIZE = 100
     STEP_SIZE = 20
     BATCH_SIZE = 128

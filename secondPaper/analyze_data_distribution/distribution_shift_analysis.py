@@ -29,7 +29,7 @@ import seaborn as sns
 # ============================================================
 # CONFIG — 请根据你的实际路径修改
 # ============================================================
-DATA_DIR = r"/home/ubuntu/wyh/cicdis/cicids2017/selected_features"  # <-- 修改为你的 data_dir 路径
+DATA_DIR = r"/home/ubuntu/wyh/cicdis/cicids2017/integrated_windows"  # <-- 修改为你的 data_dir 路径
 WINDOW_SIZE = 100
 STEP_SIZE = 20
 TRAIN_RATIO = 0.6
@@ -39,13 +39,13 @@ OUTPUT_DIR = "./shift_analysis_results"
 
 # 38个特征名称（基于 Random Forest ranking 选取的 CICIDS2017 特征）
 # 如果你有实际的特征名列表，可以替换这里
-FEATURE_NAMES = [f"Feature_{i}" for i in range(38)]
+FEATURE_NAMES = [f"Feature_{i}" for i in range(68)]
 
 
 def load_and_split(data_dir, window_size, step_size, train_ratio, val_ratio):
     """加载数据并按时间顺序划分"""
-    X_file = os.path.join(data_dir, f'selected_X_w{window_size}_s{step_size}.npy')
-    y_file = os.path.join(data_dir, f'selected_y_w{window_size}_s{step_size}.npy')
+    X_file = os.path.join(data_dir, f'integrated_X_w{window_size}_s{step_size}.npy')
+    y_file = os.path.join(data_dir, f'integrated_y_w{window_size}_s{step_size}.npy')
 
     print(f"Loading X from: {X_file}")
     print(f"Loading y from: {y_file}")

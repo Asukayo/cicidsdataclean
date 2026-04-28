@@ -20,7 +20,7 @@ matplotlib.rcParams['font.family'] = 'DejaVu Sans'
 # ============================================================
 # CONFIG
 # ============================================================
-DATA_DIR = r"/home/ubuntu/wyh/cicdis/cicids2017/selected_features"  # <-- 修改为你的实际路径
+DATA_DIR = r"/home/ubuntu/wyh/cicdis/cicids2017/integrated_windows"  # <-- 修改为你的实际路径
 WINDOW_SIZE = 100
 STEP_SIZE = 20
 TRAIN_RATIO = 0.6
@@ -29,13 +29,13 @@ OUTPUT_DIR = "./unsupervised_shift_analysis"
 RANDOM_SEED = 42
 # ============================================================
 
-FEATURE_NAMES = [f"Feature_{i}" for i in range(38)]
+FEATURE_NAMES = [f"Feature_{i}" for i in range(68)]
 
 
 def load_and_prepare():
     """加载数据并按无监督范式准备"""
-    X = np.load(os.path.join(DATA_DIR, f'selected_X_w{WINDOW_SIZE}_s{STEP_SIZE}.npy'))
-    y = np.load(os.path.join(DATA_DIR, f'selected_y_w{WINDOW_SIZE}_s{STEP_SIZE}.npy'))
+    X = np.load(os.path.join(DATA_DIR, f'integrated_X_w{WINDOW_SIZE}_s{STEP_SIZE}.npy'))
+    y = np.load(os.path.join(DATA_DIR, f'integrated_y_w{WINDOW_SIZE}_s{STEP_SIZE}.npy'))
 
     total = len(X)
     train_end = int(total * TRAIN_RATIO)

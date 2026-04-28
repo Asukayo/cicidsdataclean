@@ -47,9 +47,12 @@ class TCNBlock(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, dilation, dropout=0.1):
         super().__init__()
         self.conv1 = CausalConv1d(in_channels, out_channels, kernel_size, dilation)
-        self.bn1 = nn.BatchNorm1d(out_channels)
+        # 检测是不是因为bn
+        # self.bn1 = nn.BatchNorm1d(out_channels)
+        self.ln1 = nn.GroupNorm(1, out_channels)
         self.conv2 = CausalConv1d(out_channels, out_channels, kernel_size, dilation)
-        self.bn2 = nn.BatchNorm1d(out_channels)
+        # self.bn2 = nn.BatchNorm1d(out_channels)
+        self.ln2 = nn.GroupNorm(1, out_channels)
         self.dropout = nn.Dropout(dropout)
         self.relu = nn.ReLU()
 
@@ -64,12 +67,14 @@ class TCNBlock(nn.Module):
         residual = self.residual(x)
 
         out = self.conv1(x)
-        out = self.bn1(out)
+        # out = self.bn1(out)
+        out = self.ln1(out)
         out = self.relu(out)
         out = self.dropout(out)
 
         out = self.conv2(out)
-        out = self.bn2(out)
+        # out = self.bn2(out)
+        out = self.ln2(out)
         out = self.relu(out)
         out = self.dropout(out)
 
@@ -90,7 +95,7 @@ class TCNEncoder(nn.Module):
     def __init__(self, input_dim=38, channels=None, kernel_size=3, dropout=0.1):
         super().__init__()
         if channels is None:
-            channels = [64, 64, 64, 32, 32]  # gradually compress channels
+            channels = [96, 96, 64, 64, 32]  # gradually compress channels
 
         dilations = [2 ** i for i in range(len(channels))]
         layers = []
@@ -101,6 +106,11 @@ class TCNEncoder(nn.Module):
 
         self.network = nn.Sequential(*layers)
 
+        # 新增：因果Stride-2 下采样，T：100 -> 50
+        # kernel = 2 ，stride = 2， 左padding=0，即严格因果且无冗余
+        self.downsample = nn.Conv1d(channels[-1], channels[-1]
+                                    , kernel_size=2, stride=2,padding=0)
+
     def forward(self, x):
         """
         Args:
@@ -109,10 +119,10 @@ class TCNEncoder(nn.Module):
             z: (batch, seq_len, latent_dim) — encoded representation
         """
         # Conv1d expects (batch, channels, seq_len)
-        x = x.transpose(1, 2)
-        z = self.network(x)
-        z = z.transpose(1, 2)
-        return z
+        x = x.transpose(1, 2)  # [B, F, T]
+        z = self.network(x)  # [B, 32, 100]
+        z = self.downsample(z)  # [B, 32, 50]
+        return z.transpose(1, 2)  # [B, 50, 32]
 
 
 # ============================================================
@@ -127,9 +137,13 @@ class TCNDecoder(nn.Module):
     def __init__(self, latent_dim=32, channels=None, output_dim=38, kernel_size=3, dropout=0.1):
         super().__init__()
         if channels is None:
-            channels = [32, 64, 64, 64, 64]  # mirror of encoder
-
+            channels = [32, 64, 64, 96, 96]  # mirror of encoder
         dilations = [2 ** i for i in range(len(channels))]
+
+        # 新增:转置卷积上采样,T: 50 -> 100
+        self.upsample = nn.ConvTranspose1d(latent_dim, latent_dim,
+                                           kernel_size=2, stride=2, padding=0)
+
         layers = []
         in_ch = latent_dim
         for out_ch, d in zip(channels, dilations):
@@ -146,10 +160,10 @@ class TCNDecoder(nn.Module):
         Returns:
             x_hat: (batch, seq_len, output_dim)
         """
-        z = z.transpose(1, 2)
+        z = z.transpose(1, 2)  # [B, 32, 50]
+        z = self.upsample(z)  # [B, 32, 100]
         out = self.network(z)
-        x_hat = self.output_proj(out)
-        x_hat = x_hat.transpose(1, 2)
+        x_hat = self.output_proj(out).transpose(1, 2)
         return x_hat
 
 
@@ -169,7 +183,8 @@ class TCNAE(BaseAnomalyModel):
 
     def __init__(
         self,
-        input_dim=38,
+            # 修改为不使用RF的值
+        input_dim=78,
         window_size=100,
         enc_channels=None,
         dec_channels=None,
