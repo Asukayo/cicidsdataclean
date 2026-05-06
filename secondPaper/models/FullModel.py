@@ -21,7 +21,7 @@ import torch
 import torch.nn as nn
 from .BaseModel import BaseAnomalyModel
 from ..utils.FrequencyMasking import FrequencyMasking, get_infer_spike_boost
-
+import torch.nn.functional as F
 
 # ============================================================
 # Reused building blocks (identical to withAutoFreqWeights.py)
@@ -126,23 +126,19 @@ class LearnableLowPass(nn.Module):
     Output: (B, L, C)  — the extracted trend component
     """
 
-    def __init__(self, num_channels, kernel_size=25):
+    def __init__(self, num_channels, kernel_size=25,smooth_weight = 0.1):
         super().__init__()
+        self.smooth_weight = smooth_weight  # 建议默认 0.1
         self.kernel_size = kernel_size
         self.padding = kernel_size - 1  # causal: pad left only
-        self.conv = nn.Conv1d(
-            num_channels, num_channels, kernel_size,
-            groups=num_channels,  # depthwise: each channel independent
-            padding=0, bias=False,
-        )
-        # Initialize as uniform average: 1/k
-        nn.init.constant_(self.conv.weight, 1.0 / kernel_size)
+        # 删掉 self.conv 和 nn.init.constant_ 那两行，换成：
+        self.raw_weight = nn.Parameter(torch.zeros(num_channels, 1, kernel_size))
 
     def forward(self, x):
-        # x: (B, L, C)
-        h = x.transpose(1, 2)                            # (B, C, L)
-        h = nn.functional.pad(h, (self.padding, 0))      # causal left-pad
-        trend = self.conv(h).transpose(1, 2)              # (B, L, C)
+        h = x.transpose(1, 2)  # (B, C, L)
+        h = nn.functional.pad(h, (self.padding, 0))  # causal left-pad
+        w = torch.softmax(self.raw_weight, dim=-1)  # (C, 1, K) 归一化
+        trend = nn.functional.conv1d(h, w, groups=h.shape[1]).transpose(1, 2)
         return trend
 
 
@@ -170,21 +166,21 @@ class MemoryPrototypeBank(nn.Module):
         # Prototype vectors: (K, D)
         self.prototypes = nn.Parameter(torch.randn(num_prototypes, feat_dim) * 0.02)
 
+    # ---- 改动后 ----
     def forward(self, z):
-        """
-        z: (B, T, D)
-        Returns:
-            z_hat:       (B, T, D)
-            sparse_loss: scalar (mean negative entropy → encourages peaky attention)
-        """
-        # Dot-product attention: z @ M^T / τ
-        logits = torch.matmul(z, self.prototypes.t()) / self.tau  # (B, T, K)
-        weights = torch.softmax(logits, dim=-1)                   # (B, T, K)
+        # Decompose into direction and magnitude
+        z_scale = z.norm(dim=-1, keepdim=True).clamp(min=1e-6)  # (B, T, 1)
+        z_norm = z / z_scale  # (B, T, D)
+        m_norm = F.normalize(self.prototypes, dim=-1)  # (K, D)
 
-        # Weighted combination of prototypes
-        z_hat = torch.matmul(weights, self.prototypes)            # (B, T, D)
+        # Cosine attention: match direction only
+        logits = torch.matmul(z_norm, m_norm.t()) / self.tau  # (B, T, K)
+        weights = torch.softmax(logits, dim=-1)  # (B, T, K)
 
-        # Sparsity loss: minimize negative entropy = Σ w·log(w)
+        # Reconstruct: constrain direction, pass through magnitude
+        z_hat = z_scale * torch.matmul(weights, m_norm)  # (B, T, D)
+
+        # Sparsity regularization
         sparse_loss = (weights * torch.log(weights + 1e-8)).sum(dim=-1).mean()
 
         return z_hat, sparse_loss
@@ -287,6 +283,7 @@ class FullModel(BaseAnomalyModel):
             dec_channels=None,
             kernel_size=3,
             dropout=0.1,
+            smooth_weight=0.1,
 
             # ---- trend decomposition ----
             trend_kernel_size=25,
@@ -319,6 +316,7 @@ class FullModel(BaseAnomalyModel):
         self.sparse_weight = sparse_weight
         self.freq_loss_weight = freq_loss_weight
         self.freq_infer_segments = freq_infer_segments
+        self.smooth_weight = smooth_weight
 
         # ---- Layer 1: Trend-Stable decomposition ----
         self.trend_extractor = LearnableLowPass(input_dim, trend_kernel_size)
@@ -417,6 +415,8 @@ class FullModel(BaseAnomalyModel):
         # Branch 1: reconstruction on stable component
         stable_recon, trend, sparse_loss = self.forward(x)
         stable = x - trend
+        # 在 stable = x - trend 之后加：
+        smooth_loss = ((trend[:, 1:, :] - trend[:, :-1, :]) ** 2).mean()
 
         recon_mse = torch.mean((stable - stable_recon) ** 2, dim=(1, 2))  # (B,)
         recon_loss = recon_mse.mean()
@@ -426,15 +426,18 @@ class FullModel(BaseAnomalyModel):
         freq_loss = freq_err.mean()
 
         # Total
+        # 总 loss 改为：
         total = (recon_loss
                  + self.freq_loss_weight * freq_loss
-                 + self.sparse_weight * sparse_loss)
+                 + self.sparse_weight * sparse_loss
+                 + self.smooth_weight * smooth_loss)
 
         return {
             'loss': total,
             'recon_loss': recon_loss.item(),
             'freq_loss': freq_loss.item(),
             'sparse_loss': sparse_loss.item(),
+            'smooth_loss': smooth_loss.item(),
             'mse': recon_mse.mean().item(),
         }
 
