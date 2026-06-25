@@ -491,9 +491,9 @@ if __name__ == '__main__':
                    choices=list(MODEL_REGISTRY.keys()))
     g.add_argument('--batch_size', type=int, default=128)
     g.add_argument('--epochs', type=int, default=50)
-    g.add_argument('--lr', type=float, default=1e-3)
+    g.add_argument('--lr', type=float, default=1e-4)
     g.add_argument('--patience', type=int, default=5)
-    g.add_argument('--seed', type=int, default=42)
+    g.add_argument('--seed', type=int)
 
     g = parser.add_argument_group('OmniAnomaly')
     g.add_argument('--n_hidden', type=int, default=256)

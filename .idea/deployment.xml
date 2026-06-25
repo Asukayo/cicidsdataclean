@@ -6,25 +6,12 @@
       <paths name="cjlu_lab">
         <serverdata>
           <mappings>
-            <mapping deploy="/home/ubuntu/wyh/cicdis" local="$PROJECT_DIR$" />
+            <mapping deploy="/wyh/cicdis" local="$PROJECT_DIR$" web="/" />
+            <mapping deploy="" local="" />
           </mappings>
         </serverdata>
       </paths>
       <paths name="ubuntu@15.tcp.vip.cpolar.cn:13553 password (2)">
-        <serverdata>
-          <mappings>
-            <mapping local="$PROJECT_DIR$" web="/" />
-          </mappings>
-        </serverdata>
-      </paths>
-      <paths name="ubuntu@15.tcp.vip.cpolar.cn:13553 password (3)">
-        <serverdata>
-          <mappings>
-            <mapping local="$PROJECT_DIR$" web="/" />
-          </mappings>
-        </serverdata>
-      </paths>
-      <paths name="ubuntu@15.tcp.vip.cpolar.cn:13553 password (4)">
         <serverdata>
           <mappings>
             <mapping local="$PROJECT_DIR$" web="/" />

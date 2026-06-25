@@ -71,6 +71,10 @@ def load_data(data_dir, window_size=100, step_size=20):
     y_file = os.path.join(data_dir, f'selected_y_w{window_size}_s{step_size}.npy')
     metadata_file = os.path.join(data_dir, f'selected_metadata_w{window_size}_s{step_size}.pkl')
 
+    # X_file = os.path.join(data_dir, f'integrated_X_w{window_size}_s{step_size}.npy')
+    # y_file = os.path.join(data_dir, f'integrated_y_w{window_size}_s{step_size}.npy')
+    # metadata_file = os.path.join(data_dir, f'integrated_metadata_w{window_size}_s{step_size}.pkl')
+
 
     X = np.load(X_file)
     y = np.load(y_file)

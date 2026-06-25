@@ -63,7 +63,7 @@ class TCNBlock(nn.Module):
 
 
 class TCNDecoder(nn.Module):
-    def __init__(self, latent_dim=32, channels=None, output_dim=38,
+    def __init__(self, latent_dim=32, channels=None, output_dim=68,
                  kernel_size=3, dropout=0.1):
         super().__init__()
         if channels is None:
@@ -88,7 +88,7 @@ class TCNDecoder(nn.Module):
 
 
 class FreqPredictor(nn.Module):
-    def __init__(self, input_dim=38, hidden_dim=64, num_layers=4,
+    def __init__(self, input_dim=68, hidden_dim=64, num_layers=4,
                  kernel_size=5, dropout=0.1):
         super().__init__()
         pad = kernel_size // 2
@@ -126,20 +126,27 @@ class LearnableLowPass(nn.Module):
     Output: (B, L, C)  — the extracted trend component
     """
 
-    def __init__(self, num_channels, kernel_size=25,smooth_weight = 0.1):
+    def __init__(self, num_channels, kernel_size=25, smooth_weight=0.1):
         super().__init__()
-        self.smooth_weight = smooth_weight  # 建议默认 0.1
+        # smooth_weight is kept for backward compatibility; the actual loss
+        # coefficient is controlled by FullModel.smooth_weight.
+        self.smooth_weight = smooth_weight
         self.kernel_size = kernel_size
         self.padding = kernel_size - 1  # causal: pad left only
-        # 删掉 self.conv 和 nn.init.constant_ 那两行，换成：
+        # Softmax-normalized kernel implements a non-negative weighted moving average.
         self.raw_weight = nn.Parameter(torch.zeros(num_channels, 1, kernel_size))
 
     def forward(self, x):
         h = x.transpose(1, 2)  # (B, C, L)
         h = nn.functional.pad(h, (self.padding, 0))  # causal left-pad
-        w = torch.softmax(self.raw_weight, dim=-1)  # (C, 1, K) 归一化
+        w = torch.softmax(self.raw_weight, dim=-1)  # (C, 1, K), non-negative and sums to 1
         trend = nn.functional.conv1d(h, w, groups=h.shape[1]).transpose(1, 2)
         return trend
+
+    def smoothness_loss(self):
+        """Difference smoothness regularization on the normalized low-pass kernel."""
+        w = torch.softmax(self.raw_weight, dim=-1)
+        return ((w[:, :, 1:] - w[:, :, :-1]) ** 2).mean()
 
 
 # ============================================================
@@ -148,15 +155,16 @@ class LearnableLowPass(nn.Module):
 
 class MemoryPrototypeBank(nn.Module):
     """
-    Learnable prototype memory for constraining latent representations
-    to the convex hull of normal patterns.
+    Direction-constrained prototype memory.
 
     Input:  (B, T, D)  — intermediate encoder features
     Output: (B, T, D)  — prototype-constrained features
             sparse_loss — entropy regularization scalar
 
-    Each timestep z_t is replaced by a soft combination of K prototypes:
-        ẑ_t = Σ_k  softmax(z_t · m_k / τ) · m_k
+    Each timestep z_t is decomposed into direction and magnitude. Attention is
+    computed by cosine similarity against normalized prototypes. The output
+    direction is a convex combination of prototype directions, while the output
+    magnitude is copied from the input feature norm.
     """
 
     def __init__(self, feat_dim, num_prototypes=16, tau=0.1):
@@ -166,7 +174,6 @@ class MemoryPrototypeBank(nn.Module):
         # Prototype vectors: (K, D)
         self.prototypes = nn.Parameter(torch.randn(num_prototypes, feat_dim) * 0.02)
 
-    # ---- 改动后 ----
     def forward(self, z):
         # Decompose into direction and magnitude
         z_scale = z.norm(dim=-1, keepdim=True).clamp(min=1e-6)  # (B, T, 1)
@@ -180,8 +187,8 @@ class MemoryPrototypeBank(nn.Module):
         # Reconstruct: constrain direction, pass through magnitude
         z_hat = z_scale * torch.matmul(weights, m_norm)  # (B, T, D)
 
-        # Sparsity regularization
-        sparse_loss = (weights * torch.log(weights + 1e-8)).sum(dim=-1).mean()
+        # Entropy sparsity regularization: minimizing it sharpens attention.
+        sparse_loss = -(weights * torch.log(weights + 1e-8)).sum(dim=-1).mean()
 
         return z_hat, sparse_loss
 
@@ -201,7 +208,7 @@ class SplitTCNEncoder(nn.Module):
     ↓ Causal stride-2 downsample: T → T//2
     """
 
-    def __init__(self, input_dim=38, channels=None, kernel_size=3, dropout=0.1,
+    def __init__(self, input_dim=68, channels=None, kernel_size=3, dropout=0.1,
                  split_after=2, num_prototypes=16, proto_tau=0.1):
         super().__init__()
         if channels is None:
@@ -277,7 +284,7 @@ class FullModel(BaseAnomalyModel):
 
     def __init__(
             self,
-            input_dim=38,
+            input_dim=68,
             window_size=100,
             enc_channels=None,
             dec_channels=None,
@@ -408,15 +415,15 @@ class FullModel(BaseAnomalyModel):
 
     def compute_loss(self, x, x_mark=None):
         """
-        Total = stable_recon_MSE + λ1 * freq_loss + λ2 * sparse_loss
+        Total = stable_recon_MSE + λ1 * freq_loss + λ2 * sparse_loss + λ3 * smooth_loss
 
         Note: recon loss is computed on stable component only (trend excluded).
         """
         # Branch 1: reconstruction on stable component
         stable_recon, trend, sparse_loss = self.forward(x)
         stable = x - trend
-        # 在 stable = x - trend 之后加：
-        smooth_loss = ((trend[:, 1:, :] - trend[:, :-1, :]) ** 2).mean()
+        # Smoothness is applied to the normalized low-pass kernel, not to trend outputs.
+        smooth_loss = self.trend_extractor.smoothness_loss()
 
         recon_mse = torch.mean((stable - stable_recon) ** 2, dim=(1, 2))  # (B,)
         recon_loss = recon_mse.mean()
@@ -426,7 +433,6 @@ class FullModel(BaseAnomalyModel):
         freq_loss = freq_err.mean()
 
         # Total
-        # 总 loss 改为：
         total = (recon_loss
                  + self.freq_loss_weight * freq_loss
                  + self.sparse_weight * sparse_loss
@@ -440,6 +446,47 @@ class FullModel(BaseAnomalyModel):
             'smooth_loss': smooth_loss.item(),
             'mse': recon_mse.mean().item(),
         }
+
+    # ----------------------------------------------------------------
+    #  Score fusion
+    # ----------------------------------------------------------------
+
+    @staticmethod
+    def _normalized_rank(score):
+        """Map scores to normalized ranks in [0, 1].
+
+        This should be applied after concatenating all validation/test samples
+        when reproducing the paper's evaluation protocol.
+        """
+        if score.ndim != 1:
+            score = score.reshape(-1)
+        n = score.numel()
+        if n <= 1:
+            return torch.zeros_like(score, dtype=torch.float32)
+
+        order = torch.argsort(score)
+        rank = torch.empty(n, device=score.device, dtype=torch.float32)
+        rank[order] = torch.arange(n, device=score.device, dtype=torch.float32)
+        return rank / float(n - 1)
+
+    @classmethod
+    def rank_fusion(cls, recon_score, freq_score):
+        """Equal-weight normalized rank fusion of reconstruction and frequency scores."""
+        return cls._normalized_rank(recon_score) + cls._normalized_rank(freq_score)
+
+    @classmethod
+    def fuse_score_batches(cls, score_batches):
+        """Fuse scores after collecting all mini-batches.
+
+        Args:
+            score_batches: iterable of dicts returned by compute_anomaly_score.
+
+        Returns:
+            Tensor of final anomaly scores aligned with the concatenated samples.
+        """
+        recon_score = torch.cat([batch["recon_score"].reshape(-1) for batch in score_batches], dim=0)
+        freq_score = torch.cat([batch["freq_score"].reshape(-1) for batch in score_batches], dim=0)
+        return cls.rank_fusion(recon_score, freq_score)
 
     # ----------------------------------------------------------------
     #  Inference: anomaly scoring
@@ -483,7 +530,14 @@ class FullModel(BaseAnomalyModel):
             )
             freq_score = boosted.sum(dim=(1, 2)) / (total_count + 1e-8)
 
+        # Paper's final score is normalized-rank fusion. If inference is performed
+        # batch by batch, concatenate recon_score/freq_score over the whole split and
+        # call FullModel.rank_fusion once globally. The field below is correct only
+        # when x contains the whole scoring split.
+        anomaly_score = self.rank_fusion(recon_score, freq_score)
+
         return {
+            'anomaly_score': anomaly_score,
             'recon_score': recon_score,
             'freq_score': freq_score,
         }

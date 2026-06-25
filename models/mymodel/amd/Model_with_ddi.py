@@ -33,11 +33,11 @@ class Model(nn.Module):
             HybridSeriesDecompose(
                 top_k=5,low_freq_ratio=0.4,energy_threshold=0.8,ma_type='ema',
                 ema_alpha=0.3,
-            seq_len=configs.seq_len,features=38))
+            seq_len=configs.seq_len,features=configs.enc_in))
          # 通道数，即输入数据维度大小
         self.channels = configs.enc_in
 
-        input_shape = [configs.seq_len,38]
+        input_shape = [configs.seq_len,configs.enc_in]
         self.DDI_trend = DDI(input_shape=input_shape,patch=25,dropout=0.4)
 
         # 添加通道注意力机制

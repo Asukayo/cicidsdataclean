@@ -178,7 +178,8 @@ def print_split_info(split_info):
 # ============================================================
 if __name__ == '__main__':
     # DATA_DIR = r"/home/ubuntu/wyh/cicdis/cicids2017/selected_features"  # <-- 修改为你的实际路径
-    DATA_DIR = r"../cicids2017/selected_features"
+    # DATA_DIR = r"../cicids2017/selected_features"
+    DATA_DIR = "/home/ubuntu/wyh/cicdis/cicids2018/selected"
     WINDOW_SIZE = 100
     STEP_SIZE = 20
     BATCH_SIZE = 128
@@ -189,7 +190,7 @@ if __name__ == '__main__':
 
     # 2. 划分（训练集自动过滤异常窗口）
     train_data, val_data, test_data, split_info = split_data_unsupervised(
-        X, y, train_ratio=0.6, val_ratio=0.2
+        X, y, train_ratio=0.4, val_ratio=0.4
     )
     print_split_info(split_info)
 

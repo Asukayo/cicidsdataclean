@@ -420,7 +420,7 @@ if __name__ == '__main__':
 
     # 修改以使用完整数据
     g.add_argument('--data_dir',     type=str,
-                   default= r"/home/ubuntu/wyh/cicdis/cicids2017/integrated_windows")
+                   default= r"/home/ubuntu/wyh/cicdis/cicids2018/integrated_windows")
 
     # g.add_argument('--data_dir', type=str,
     #                default=r"D:\Files\GithubResp\cicidsdataclean\cicids2017\integrated_windows")
@@ -445,7 +445,7 @@ if __name__ == '__main__':
     g = parser.add_argument_group('OmniAnomaly')
     g.add_argument('--n_hidden', type=int,   default=256)
     g.add_argument('--n_latent', type=int,   default=64)
-    g.add_argument('--beta',     type=float, default=0.0001)
+    g.add_argument('--beta',     type=float, default=0.001)
 
     # TCNAE 专用
     g = parser.add_argument_group('TCNAE')
