@@ -1,20 +1,23 @@
 """
-FullModel: TCN Autoencoder with Trend-Stable Decomposition,
-           Multi-Scale Memory Prototypes, and Frequency Masked Prediction.
+FreqDAR full model: frequency-aware drift-adaptive reconstruction.
 
 Architecture overview:
     x → LearnableLowPass → trend
       → stable = x - trend
       → TCNEncoder_front (Block 1-2)
-      → MemoryPrototypeBank (softmax attention over K prototypes)
+      → MemoryPrototypeBank (cosine attention, direction constraint,
+                              and input-norm scaling)
       → TCNEncoder_back  (Block 3-5 + downsample)
       → TCNDecoder → ŝ (stable reconstruction)
-      → x̂ = ŝ + trend
       → anomaly score = MSE(stable, ŝ)   (trend excluded from scoring)
 
-    Frequency branch (unchanged from withAutoFreqWeights):
+    Frequency branch:
       x → rFFT → random mask → FreqPredictor → masked prediction loss
       with homoscedastic uncertainty weighting (freq_log_var)
+
+    Final score:
+      validation ECDF(reconstruction score)
+      + validation ECDF(frequency score)
 """
 
 import torch
@@ -162,30 +165,37 @@ class MemoryPrototypeBank(nn.Module):
             sparse_loss — entropy regularization scalar
 
     Each timestep z_t is decomposed into direction and magnitude. Attention is
-    computed by cosine similarity against normalized prototypes. The output
-    direction is a convex combination of prototype directions, while the output
-    magnitude is copied from the input feature norm.
+    computed by cosine similarity against normalized prototypes. A convex
+    combination of prototype directions is normalized again, and the resulting
+    direction is rescaled by the input feature norm.
     """
 
-    def __init__(self, feat_dim, num_prototypes=16, tau=0.1):
+    def __init__(self, feat_dim, num_prototypes=16, tau=0.1, eps=1e-8):
         super().__init__()
         self.num_prototypes = num_prototypes
         self.tau = tau
+        self.eps = eps
         # Prototype vectors: (K, D)
         self.prototypes = nn.Parameter(torch.randn(num_prototypes, feat_dim) * 0.02)
 
     def forward(self, z):
         # Decompose into direction and magnitude
-        z_scale = z.norm(dim=-1, keepdim=True).clamp(min=1e-6)  # (B, T, 1)
-        z_norm = z / z_scale  # (B, T, D)
-        m_norm = F.normalize(self.prototypes, dim=-1)  # (K, D)
+        z_scale = z.norm(dim=-1, keepdim=True)  # (B, T, 1)
+        z_norm = F.normalize(z, dim=-1, eps=self.eps)  # (B, T, D)
+        m_norm = F.normalize(self.prototypes, dim=-1, eps=self.eps)  # (K, D)
 
         # Cosine attention: match direction only
         logits = torch.matmul(z_norm, m_norm.t()) / self.tau  # (B, T, K)
         weights = torch.softmax(logits, dim=-1)  # (B, T, K)
 
-        # Reconstruct: constrain direction, pass through magnitude
-        z_hat = z_scale * torch.matmul(weights, m_norm)  # (B, T, D)
+        # Eq. (5): normalize the prototype mixture direction before copying
+        # the input norm. Without this second normalization, the output norm
+        # also depends on attention dispersion and does not match the paper.
+        mixture = torch.matmul(weights, m_norm)  # (B, T, D)
+        mixture_direction = mixture / (
+            mixture.norm(dim=-1, keepdim=True) + self.eps
+        )
+        z_hat = z_scale * mixture_direction  # (B, T, D)
 
         # Entropy sparsity regularization: minimizing it sharpens attention.
         sparse_loss = -(weights * torch.log(weights + 1e-8)).sum(dim=-1).mean()
@@ -309,6 +319,7 @@ class FullModel(BaseAnomalyModel):
             freq_kernel_size=5,
             freq_loss_weight=1.0,
             freq_infer_segments=10,
+            freq_spike_alpha=2.0,
     ):
         super().__init__()
         self.name = 'FullModel'
@@ -323,6 +334,7 @@ class FullModel(BaseAnomalyModel):
         self.sparse_weight = sparse_weight
         self.freq_loss_weight = freq_loss_weight
         self.freq_infer_segments = freq_infer_segments
+        self.freq_spike_alpha = freq_spike_alpha
         self.smooth_weight = smooth_weight
 
         # ---- Layer 1: Trend-Stable decomposition ----
@@ -363,6 +375,12 @@ class FullModel(BaseAnomalyModel):
         F_len = window_size // 2 + 1
         self.freq_log_var = nn.Parameter(torch.zeros(1, F_len, 1))
 
+        # Validation ECDF references are data-dependent calibration state, not
+        # trainable model parameters. They are deliberately excluded from model
+        # checkpoints and must be fitted from the validation split after loading.
+        self.register_buffer("_val_recon_sorted", torch.empty(0), persistent=False)
+        self.register_buffer("_val_freq_sorted", torch.empty(0), persistent=False)
+
     # ----------------------------------------------------------------
     #  Forward: reconstruction branch
     # ----------------------------------------------------------------
@@ -371,7 +389,7 @@ class FullModel(BaseAnomalyModel):
         """
         Returns:
             stable_recon: (B, L, C)  — reconstructed stable component
-            trend:        (B, L, C)  — extracted trend (for add-back)
+            trend:        (B, L, C)  — extracted trend used to form the target
             sparse_loss:  scalar     — prototype sparsity regularization
         """
         trend = self.trend_extractor(x)         # (B, L, C)
@@ -393,19 +411,22 @@ class FullModel(BaseAnomalyModel):
 
         raw_sq_err = (pred - out["amp_original"]) ** 2
 
-        if self.training:
-            precision = torch.exp(-self.freq_log_var)
-            loss_components = (raw_sq_err * precision + self.freq_log_var) * inv_mask
-            C = x.shape[-1]
-            per_sample_err = loss_components.sum(dim=(1, 2)) / (
-                out["num_masked"].float() * C + 1e-8
+        if raw_sq_err.shape[1] != self.freq_log_var.shape[1]:
+            raise ValueError(
+                "Input window length does not match the configured window_size: "
+                f"got {x.shape[1]} time steps ({raw_sq_err.shape[1]} rFFT bins), "
+                f"expected {self.window_size} ({self.freq_log_var.shape[1]} bins)."
             )
-        else:
-            sq_err = raw_sq_err * inv_mask
-            C = x.shape[-1]
-            per_sample_err = sq_err.sum(dim=(1, 2)) / (
-                out["num_masked"].float() * C + 1e-8
-            )
+
+        # Eq. (1) is the frequency training/validation objective. Inference
+        # scoring is implemented separately in compute_anomaly_score(), so this
+        # loss must not change merely because the module is in eval mode.
+        precision = torch.exp(-self.freq_log_var)
+        loss_components = (raw_sq_err * precision + self.freq_log_var) * inv_mask
+        C = x.shape[-1]
+        per_sample_err = loss_components.sum(dim=(1, 2)) / (
+            out["num_masked"].float() * C + 1e-8
+        )
 
         return per_sample_err, out
 
@@ -452,41 +473,98 @@ class FullModel(BaseAnomalyModel):
     # ----------------------------------------------------------------
 
     @staticmethod
-    def _normalized_rank(score):
-        """Map scores to normalized ranks in [0, 1].
-
-        This should be applied after concatenating all validation/test samples
-        when reproducing the paper's evaluation protocol.
-        """
-        if score.ndim != 1:
-            score = score.reshape(-1)
-        n = score.numel()
-        if n <= 1:
-            return torch.zeros_like(score, dtype=torch.float32)
-
-        order = torch.argsort(score)
-        rank = torch.empty(n, device=score.device, dtype=torch.float32)
-        rank[order] = torch.arange(n, device=score.device, dtype=torch.float32)
-        return rank / float(n - 1)
+    def _as_flat_score(score):
+        """Convert an array-like branch score to a one-dimensional float tensor."""
+        if not torch.is_tensor(score):
+            score = torch.as_tensor(score)
+        if not torch.is_floating_point(score):
+            score = score.float()
+        return score.reshape(-1)
 
     @classmethod
-    def rank_fusion(cls, recon_score, freq_score):
-        """Equal-weight normalized rank fusion of reconstruction and frequency scores."""
-        return cls._normalized_rank(recon_score) + cls._normalized_rank(freq_score)
+    def _split_branch_scores(cls, recon_score, freq_score=None):
+        """Accept either two score arrays or one branch-score dictionary."""
+        if isinstance(recon_score, dict):
+            if freq_score is not None:
+                raise ValueError(
+                    "Pass either a branch-score dictionary or two score arrays, not both."
+                )
+            freq_score = recon_score["freq_score"]
+            recon_score = recon_score["recon_score"]
+        if freq_score is None:
+            raise ValueError("Both reconstruction and frequency scores are required.")
 
-    @classmethod
-    def fuse_score_batches(cls, score_batches):
-        """Fuse scores after collecting all mini-batches.
+        recon_score = cls._as_flat_score(recon_score)
+        freq_score = cls._as_flat_score(freq_score)
+        if recon_score.numel() != freq_score.numel():
+            raise ValueError(
+                "Reconstruction and frequency score arrays must have the same length."
+            )
+        return recon_score, freq_score
+
+    @staticmethod
+    def _empirical_cdf(score, sorted_reference):
+        """Evaluate F_val(score) = count(reference <= score) / len(reference)."""
+        if sorted_reference.numel() == 0:
+            raise RuntimeError(
+                "Validation ECDF is not fitted. Call fit_validation_ecdf() first."
+            )
+        reference = sorted_reference.to(device=score.device, dtype=score.dtype)
+        ranks = torch.searchsorted(reference, score.contiguous(), right=True)
+        return ranks.to(dtype=score.dtype) / reference.numel()
+
+    @property
+    def validation_ecdf_is_fitted(self):
+        return self._val_recon_sorted.numel() > 0 and self._val_freq_sorted.numel() > 0
+
+    def clear_validation_ecdf(self):
+        """Remove validation calibration when switching datasets/splits."""
+        self._val_recon_sorted = self._val_recon_sorted.new_empty(0)
+        self._val_freq_sorted = self._val_freq_sorted.new_empty(0)
+
+    def fit_validation_ecdf(self, recon_score, freq_score=None):
+        """Fit the two fixed validation-set ECDF mappings from Eq. (9).
 
         Args:
-            score_batches: iterable of dicts returned by compute_anomaly_score.
+            recon_score: validation reconstruction scores, or a dictionary with
+                ``recon_score`` and ``freq_score`` entries.
+            freq_score: validation frequency scores when ``recon_score`` is not
+                a dictionary.
 
         Returns:
-            Tensor of final anomaly scores aligned with the concatenated samples.
+            ``self`` for convenient chaining.
         """
-        recon_score = torch.cat([batch["recon_score"].reshape(-1) for batch in score_batches], dim=0)
-        freq_score = torch.cat([batch["freq_score"].reshape(-1) for batch in score_batches], dim=0)
-        return cls.rank_fusion(recon_score, freq_score)
+        recon_score, freq_score = self._split_branch_scores(recon_score, freq_score)
+        if recon_score.numel() == 0:
+            raise ValueError("Cannot fit an ECDF from an empty validation set.")
+        if not torch.isfinite(recon_score).all() or not torch.isfinite(freq_score).all():
+            raise ValueError("Validation scores must contain only finite values.")
+
+        self._val_recon_sorted = torch.sort(recon_score.detach())[0]
+        self._val_freq_sorted = torch.sort(freq_score.detach())[0]
+        return self
+
+    def rank_fusion(self, recon_score, freq_score=None):
+        """Fuse branch scores using the fixed validation ECDFs from Eq. (9)."""
+        recon_score, freq_score = self._split_branch_scores(recon_score, freq_score)
+        recon_rank = self._empirical_cdf(recon_score, self._val_recon_sorted)
+        freq_rank = self._empirical_cdf(freq_score, self._val_freq_sorted)
+        return recon_rank + freq_rank
+
+    def fuse_score_batches(self, score_batches):
+        """Fuse collected inference batches using previously fitted ECDFs."""
+        score_batches = list(score_batches)
+        if not score_batches:
+            raise ValueError("score_batches must contain at least one batch.")
+        recon_score = torch.cat(
+            [self._as_flat_score(batch["recon_score"]) for batch in score_batches],
+            dim=0,
+        )
+        freq_score = torch.cat(
+            [self._as_flat_score(batch["freq_score"]) for batch in score_batches],
+            dim=0,
+        )
+        return self.rank_fusion(recon_score, freq_score)
 
     # ----------------------------------------------------------------
     #  Inference: anomaly scoring
@@ -526,18 +604,23 @@ class FullModel(BaseAnomalyModel):
                 total_count += inv_mask.sum(dim=(1, 2)) * C
 
             boosted = get_infer_spike_boost(
-                total_err_map, self.freq_log_var, alpha=2.0
+                total_err_map, self.freq_log_var, alpha=self.freq_spike_alpha
             )
             freq_score = boosted.sum(dim=(1, 2)) / (total_count + 1e-8)
 
-        # Paper's final score is normalized-rank fusion. If inference is performed
-        # batch by batch, concatenate recon_score/freq_score over the whole split and
-        # call FullModel.rank_fusion once globally. The field below is correct only
-        # when x contains the whole scoring split.
-        anomaly_score = self.rank_fusion(recon_score, freq_score)
-
+        # Final fusion is intentionally not performed here: Eq. (9) requires
+        # validation-set ECDFs, which are dataset-level statistics rather than
+        # mini-batch statistics. Use fit_validation_ecdf() once on validation
+        # branch scores, then rank_fusion() for validation/test branch scores.
         return {
-            'anomaly_score': anomaly_score,
             'recon_score': recon_score,
             'freq_score': freq_score,
+        }
+
+    def compute_fused_anomaly_score(self, x, x_mark=None):
+        """Compute branch scores and fuse them with fitted validation ECDFs."""
+        scores = self.compute_anomaly_score(x, x_mark)
+        return {
+            'anomaly_score': self.rank_fusion(scores),
+            **scores,
         }

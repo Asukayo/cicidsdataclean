@@ -39,7 +39,7 @@ WINDOW_SIZE = 100
 STEP_SIZE = 20
 BATCH_SIZE = 128
 OUTPUT_PNG = "drift_motivation_compare_2017_2018_TNSM.png"
-DPI = 600
+DPI = 900
 
 # 低频 / 高频区间定义（占总频率 bin 数的比例）
 LOW_FREQ_RATIO = 0.2

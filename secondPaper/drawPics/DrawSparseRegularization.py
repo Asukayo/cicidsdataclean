@@ -277,7 +277,7 @@ for i in top_ids:
 # 8. Save
 # ============================================================
 
-fig.savefig(png_path, dpi=300, bbox_inches="tight", pad_inches=0.04)
+fig.savefig(png_path, dpi=900, bbox_inches="tight", pad_inches=0.04)
 fig.savefig(pdf_path, bbox_inches="tight", pad_inches=0.04)
 fig.savefig(svg_path, bbox_inches="tight", pad_inches=0.04)
 

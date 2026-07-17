@@ -1,92 +1,210 @@
-"""
-Ablation study as a grouped bar chart, styled as a series-mate of the
-sensitivity panel: serif type, dark-red / steel-blue palette, three
-innovation groups separated by gaps, shaded middle band, italic-gray
-group titles, restrained ratio annotations, no heavy bar outlines.
+from pathlib import Path
 
-x-axis : 8 ablation variants, grouped by the innovation they probe.
-y-axis : F1* drop w.r.t. the full model (larger = the module matters more).
-2017/2018 drop ratio annotated only for the reconstruction variants
-being contrasted (A4/A7 drift-targeted, bold red; A6 general, gray).
-"""
-
-import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.patches import Patch
+import matplotlib.pyplot as plt
 
 plt.rcParams.update({
     "font.family": "serif",
-    "font.serif": ["DejaVu Serif"],          # swap for "Times New Roman" if available
+    "font.serif": ["DejaVu Serif"],
     "mathtext.fontset": "dejavuserif",
     "font.size": 10,
     "axes.linewidth": 0.9,
 })
 
-C17, C18 = "#8b3a3a", "#35688a"              # dark red = 2017, steel blue = 2018
-SHADE = "#f0f0f0"
+# =========================
+# Data from your table
+# =========================
 
-# id, two-line label, drop17, drop18, x-position, ratio-style
-V = [
-    ("A1",  "w/o Freq\nBranch",     0.040, 0.031, 0.0, None),
-    ("A2a", "Manual\nWeights",      0.007, 0.014, 2.0, None),
-    ("A2b", "Uniform\nWeights",     0.022, 0.003, 3.0, None),
-    ("A3",  "w/o Spike\nBoost",     0.010, 0.008, 4.0, None),
-    ("A4",  "w/o Trend\nDecomp",    0.028, 0.011, 6.0, "hi"),
-    ("A5",  "w/o Proto\nBank",      0.034, 0.024, 7.0, None),
-    ("A6",  "Dot-Prod\nAttn",       0.024, 0.017, 8.0, "lo"),
-    ("A7",  "w/o Norm\nRetention",  0.029, 0.012, 9.0, "hi"),
+groups = [
+    {
+        "title": r"Prototypes $K$",
+        "labels": ["8", "16", "32", "64"],
+        "auc": [0.809, 0.817, 0.816, 0.815],
+        "f1":  [0.761, 0.772, 0.773, 0.768],
+        "default_idx": 1,   # K = 16
+    },
+    {
+        "title": r"Kernel size $K_{lp}$",
+        "labels": ["10", "25", "40", "50"],
+        "auc": [0.811, 0.817, 0.816, 0.814],
+        "f1":  [0.763, 0.772, 0.770, 0.767],
+        "default_idx": 1,   # K_lp = 25
+    },
+    {
+        "title": r"Temperature $\tau$",
+        "labels": ["0.05", "0.1", "0.2", "0.5"],
+        "auc": [0.813, 0.817, 0.816, 0.808],
+        "f1":  [0.764, 0.772, 0.771, 0.756],
+        "default_idx": 1,   # tau = 0.1
+    },
 ]
-group_titles = [(0.0, "Dual branch"),
-                (3.0, "Adaptive freq. weighting"),
-                (7.5, "Drift-robust reconstruction")]
 
-w = 0.38
-fig, ax = plt.subplots(figsize=(7.8, 4.2))
-fig.subplots_adjust(left=0.10, right=0.97, top=0.86, bottom=0.16)
+C_F1 = "#8b3a3a"
+C_AUC = "#35688a"
 
-# shaded middle group
-ax.axvspan(1.3, 4.7, color=SHADE, zorder=0)
+# 默认配置对应的性能
+DEFAULT_F1 = 0.772
+DEFAULT_AUC = 0.817
 
-for vid, lab, d17, d18, x, rs in V:
-    ax.bar(x - w/2, d17, w, color=C17, zorder=3)
-    ax.bar(x + w/2, d18, w, color=C18, zorder=3)
-    if rs is not None:
-        top = max(d17, d18)
-        ax.text(x, top + 0.0016, f"{d17/d18:.1f}" + r"$\times$",
-                ha="center", va="bottom",
-                fontsize=9, color=(C17 if rs == "hi" else "#777777"),
-                fontweight=("bold" if rs == "hi" else "normal"))
+# 构造横坐标：三组之间留空隙
+x_groups = [
+    np.array([0, 1, 2, 3]),
+    np.array([5, 6, 7, 8]),
+    np.array([10, 11, 12, 13]),
+]
 
-# group titles (italic gray, panel voice)
-for xc, name in group_titles:
-    ax.text(xc, 1.055, name, transform=ax.get_xaxis_transform(),
-            ha="center", va="bottom", fontsize=9.5, style="italic", color="#888888")
+x_all = np.concatenate(x_groups)
+x_labels = sum([g["labels"] for g in groups], [])
 
-# x labels
-xticks = [v[4] for v in V]
-xlabs = [f"{v[0]}\n{v[1]}" for v in V]
-ax.set_xticks(xticks)
-ax.set_xticklabels(xlabs, fontsize=8)
-ax.tick_params(axis="x", length=0)
+fig, (ax_f1, ax_auc) = plt.subplots(
+    2,
+    1,
+    figsize=(7.0, 5.2),
+    sharex=True,
+    gridspec_kw={"height_ratios": [1, 1], "hspace": 0.12},
+)
 
-ax.set_xlim(-0.85, 9.9)
-ax.set_ylim(0, 0.046)
-ax.set_yticks([0, 0.01, 0.02, 0.03, 0.04])
-ax.set_ylabel(r"F1$^{*}$ drop w.r.t. full model")
-ax.grid(axis="y", ls=":", lw=0.6, alpha=0.55)
-ax.set_axisbelow(True)
-for sp in ["top", "right"]:
-    ax.spines[sp].set_visible(False)
+fig.subplots_adjust(left=0.11, right=0.985, top=0.90, bottom=0.14)
 
-# legend (no frame) over the empty space above the short middle group
-leg = ax.legend(handles=[Patch(facecolor=C17, label="CICIDS2017 (strong drift)"),
-                         Patch(facecolor=C18, label="CICIDS2018 (weak drift)")],
-                loc="upper center", bbox_to_anchor=(0.40, 0.99),
-                frameon=False, fontsize=8.6, handlelength=1.3, labelspacing=0.4)
-ax.text(0.40, 0.70, r"$n\times$ = 2017/2018 drop ratio",
-        transform=ax.transAxes, ha="center", va="top",
-        fontsize=8.2, style="italic", color="#777777")
+# =========================
+# Background shading
+# =========================
 
-fig.savefig("ablation_grouped.pdf", bbox_inches="tight")
-fig.savefig("ablation_grouped.png", dpi=200, bbox_inches="tight")
-print("saved")
+# 中间 Kernel size 区域加灰色背景
+for ax in [ax_f1, ax_auc]:
+    ax.axvspan(4.45, 8.55, color="#efefef", zorder=0)
+
+# =========================
+# Plot function
+# =========================
+
+def plot_panel(ax, metric_key, color, default_y):
+    for x, group in zip(x_groups, groups):
+        y = np.array(group[metric_key])
+
+        ax.plot(
+            x,
+            y,
+            color=color,
+            linewidth=1.5,
+            marker="o",
+            markersize=5,
+            markerfacecolor="white",
+            markeredgecolor=color,
+            markeredgewidth=1.2,
+            zorder=3,
+        )
+
+        # 默认配置点使用实心圆
+        default_x = x[group["default_idx"]]
+        default_val = y[group["default_idx"]]
+
+        ax.scatter(
+            default_x,
+            default_val,
+            s=32,
+            color=color,
+            zorder=4,
+        )
+
+    # 默认性能水平线
+    ax.axhline(
+        default_y,
+        color="#999999",
+        linestyle=(0, (4, 3)),
+        linewidth=0.9,
+        zorder=1,
+    )
+
+    ax.grid(axis="y", linestyle=":", linewidth=0.7, alpha=0.5)
+    ax.set_axisbelow(True)
+
+    for spine in ["top", "right"]:
+        ax.spines[spine].set_visible(False)
+
+
+# =========================
+# Draw panels
+# =========================
+
+plot_panel(ax_f1, "f1", C_F1, DEFAULT_F1)
+plot_panel(ax_auc, "auc", C_AUC, DEFAULT_AUC)
+
+# =========================
+# Axis settings
+# =========================
+
+ax_f1.set_ylabel(r"F1$^*$")
+ax_auc.set_ylabel("AUC-ROC")
+
+ax_f1.set_ylim(0.748, 0.781)
+ax_f1.set_yticks([0.750, 0.760, 0.770, 0.780])
+
+ax_auc.set_ylim(0.805, 0.822)
+ax_auc.set_yticks([0.805, 0.810, 0.815, 0.820])
+
+ax_auc.set_xticks(x_all)
+ax_auc.set_xticklabels(x_labels)
+
+# =========================
+# Group titles
+# =========================
+
+for x, group in zip(x_groups, groups):
+    center = x.mean()
+    ax_f1.text(
+        center,
+        1.05,
+        group["title"],
+        transform=ax_f1.get_xaxis_transform(),
+        ha="center",
+        va="bottom",
+        fontsize=11,
+    )
+
+# =========================
+# Default annotation
+# =========================
+
+ax_f1.text(
+    12.55,
+    DEFAULT_F1 + 0.001,
+    "default",
+    ha="left",
+    va="bottom",
+    fontsize=8.5,
+    fontstyle="italic",
+    color="#777777",
+)
+
+ax_auc.text(
+    12.55,
+    DEFAULT_AUC + 0.0003,
+    "default",
+    ha="left",
+    va="bottom",
+    fontsize=8.5,
+    fontstyle="italic",
+    color="#777777",
+)
+
+# Temperature tau = 0.5 的下降标注
+ax_f1.text(
+    12.45,
+    0.751,
+    r"$-0.016$",
+    ha="center",
+    va="center",
+    fontsize=9,
+    color=C_F1,
+)
+
+# =========================
+# Save
+# =========================
+
+out_path = Path(__file__).resolve().parent / "hyperparameter_sensitivity.png"
+fig.savefig(out_path, dpi=900, bbox_inches="tight")
+print(f"saved to {out_path}")
+
+plt.show()

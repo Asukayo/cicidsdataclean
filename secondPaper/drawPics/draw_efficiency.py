@@ -88,6 +88,6 @@ axA.annotate("", xy=(0.05, 0.965), xytext=(0.155, 0.875), xycoords="axes fractio
 axA.text(0.165, 0.882, "better", transform=axA.transAxes,
          fontsize=8.5, style="italic", color="#999999", va="center")
 
-fig.savefig("/efficiency_2panel.pdf", bbox_inches="tight")
-fig.savefig("/efficiency_2panel.png", dpi=200, bbox_inches="tight")
+# fig.savefig("/efficiency_2panel.pdf", bbox_inches="tight")
+fig.savefig("efficiency_2panel.png", dpi=900, bbox_inches="tight")
 print("saved")

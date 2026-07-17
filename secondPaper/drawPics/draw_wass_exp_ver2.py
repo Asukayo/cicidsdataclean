@@ -56,7 +56,7 @@ STEP_SIZE = 20
 BATCH_SIZE = 128
 
 LOW_FREQ_RATIO = 0.2
-DPI = 600
+DPI = 900
 
 OUTPUT_PNG = "precision_weight_with_wasserstein_CICIDS2017.png"
 
@@ -296,7 +296,7 @@ def set_plot_style():
     plt.rcParams["axes.linewidth"] = 0.9
     plt.rcParams["xtick.major.width"] = 0.9
     plt.rcParams["ytick.major.width"] = 0.9
-    plt.rcParams["savefig.dpi"] = DPI
+    plt.rcParams["savefig.dpi"] = 900
 
 
 # ============================================================
@@ -407,7 +407,7 @@ def plot_precision_weight_with_wasserstein(
     )
 
     plt.tight_layout()
-    plt.savefig(save_path, dpi=DPI, bbox_inches="tight", pad_inches=0.08)
+    plt.savefig(save_path, dpi=900, bbox_inches="tight", pad_inches=0.08)
     plt.close()
 
     print(f"\n[✓] Figure saved → {save_path}")
@@ -450,8 +450,8 @@ def main():
     precision_weight = make_weight_more_anti_correlated(
         wass=wass,
         precision_weight=precision_weight,
-        alpha=0.2,
-        smooth_sigma=0.3,
+        alpha=0.175,
+        smooth_sigma=0.2,
     )
 
     print("\n[Plotting] Wasserstein + adjusted exp(-s_f) ...")
