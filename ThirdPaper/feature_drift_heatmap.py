@@ -43,7 +43,7 @@ from unsupervised_provider import load_data, print_split_info
 # 配置区：通常只需要修改这里
 # ============================================================
 DATA_DIR = "/home/ubuntu/wyh/cicdis/cicids2017/integrated_windows"
-OUTPUT_DIR = "./feature_drift_outputs"
+OUTPUT_DIR = "./2017feature_drift_outputs"
 
 WINDOW_SIZE = 100
 STEP_SIZE = 20

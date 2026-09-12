@@ -29,7 +29,7 @@ D = [
     ("STFT-TCAN",   0.72,  24.9, 0.669, (-2, 9, "center"), (-2,  9, "center")),
     ("DTAAD",       1.29,  81.3, 0.674, ( 8, -7, "left"),  (-2,  9, "center")),
     ("TranAD",      2.17, 108.3, 0.653, ( 0,-14, "center"),( 0,-14, "center")),
-    ("FreqDAR",     1.21,  35.8, 0.721, (-4, 10, "center"),( 0, 10, "center")),
+    ("FTRAD",     1.21,  35.8, 0.721, (-4, 10, "center"),( 0, 10, "center")),
     ("TransDe",     8.92, 886.2, 0.697, ( 0, 10, "center"),(-9,  0, "right")),
 ]
 F1_BEST = 0.721
@@ -42,7 +42,7 @@ def panel(ax, xi, label_i, xlim, xticks, xlab):
     for d in D:
         name, x, f1 = d[0], d[xi], d[3]
         dx, dy, ha = d[label_i]
-        if name == "FreqDAR":
+        if name == "FTRAD":
             ax.scatter(x, f1, s=62, facecolor=C_MAIN, edgecolor=C_MAIN,
                        linewidth=1.4, zorder=5)
             ax.annotate(name, (x, f1), textcoords="offset points",

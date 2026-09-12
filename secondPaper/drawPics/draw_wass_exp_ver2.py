@@ -387,12 +387,12 @@ def plot_precision_weight_with_wasserstein(
     ax_top.set_xlabel(r"Normalized Frequency $f/f_{max}$", fontsize=9)
     ax_top.set_xticks(np.linspace(0, 1, 6))
 
-    ax1.set_title(
-        "Frequency-domain Drift vs. Learned Precision Weight",
-        fontsize=11,
-        fontweight="bold",
-        pad=10,
-    )
+    # ax1.set_title(
+    #     "Frequency-domain Drift vs. Learned Precision Weight",
+    #     fontsize=11,
+    #     fontweight="bold",
+    #     pad=10,
+    # )
 
     handles = [line_wass, line_weight, low_patch]
     labels = [h.get_label() for h in handles]

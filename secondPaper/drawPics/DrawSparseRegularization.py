@@ -62,15 +62,15 @@ plt.rcParams.update({
     "axes.linewidth": 1.0,
 })
 
-fig = plt.figure(figsize=(10.8, 5.2), dpi=300)
+fig = plt.figure(figsize=(10.8, 5.2), dpi=600)
 fig.patch.set_facecolor("#FFFFFF")
 
-fig.suptitle(
-    "Sparsity Regularization on Prototype Attention Weights",
-    fontsize=15,
-    fontweight="bold",
-    y=0.975
-)
+# fig.suptitle(
+#     "Sparsity Regularization on Prototype Attention Weights",
+#     fontsize=15,
+#     fontweight="bold",
+#     y=0.975
+# )
 
 # 中间列稍微加宽，用来放箭头、文字和图例
 gs = fig.add_gridspec(
